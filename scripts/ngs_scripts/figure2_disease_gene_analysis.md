@@ -1,31 +1,31 @@
----
-title: "figure2_disease_gene_analysis"
-author: "Priya Veeraraghavan"
-date: "2023-04-05"
-output: github_document
----
+figure2_disease_gene_analysis
+================
+Priya Veeraraghavan
+2023-04-05
 
 # Comparative analysis Disease risk genes Whole Exome Sequencing
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message=FALSE, warnings=FALSE)
-```
-
-
 Enrichment analysis for disease-associated genes in GC/soma data
-Sources:
-ASD Whole Exome Seuquencing: Satterstrom, et al. Cell 2021. https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7250485/
-SFARI risk genes (sfari.org)
-SCHEMA Whole Exome Rare Coding Variants: Singh, et al. Nature 2022. https://www.nature.com/articles/s41586-022-04556-w#MOESM1
-SCHEMA WES+FineMap Prority: Trubetskoy, et al. Nature 2022. https://www.nature.com/articles/s41586-022-04434-5
-BipEx: Palmer, et al. Nature Genetics 2022. https://www.nature.com/articles/s41588-022-01034-x
-
+Sources: ASD Whole Exome Seuquencing: Satterstrom, et al. Cell 2021.
+<https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7250485/> SFARI risk genes
+(sfari.org) SCHEMA Whole Exome Rare Coding Variants: Singh, et
+al. Nature 2022.
+<https://www.nature.com/articles/s41586-022-04556-w#MOESM1> SCHEMA
+WES+FineMap Prority: Trubetskoy, et al. Nature 2022.
+<https://www.nature.com/articles/s41586-022-04434-5> BipEx: Palmer, et
+al. Nature Genetics 2022.
+<https://www.nature.com/articles/s41588-022-01034-x>
 
 ## Approach
-1. Segment into "expression groups": GC-localized or soma-restricted in either subtype at DPC23
-2. Extract "significant" disease risk genes from the whole exome studies
-3. Look for enrichment or depletion of risk genes in each geneset using fisher's exact test. 
-```{r}
+
+1.  Segment into “expression groups”: GC-localized or soma-restricted in
+    either subtype at DPC23
+2.  Extract “significant” disease risk genes from the whole exome
+    studies
+3.  Look for enrichment or depletion of risk genes in each geneset using
+    fisher’s exact test.
+
+``` r
 library(biomaRt)
 library(rjson)
 library(readxl)
@@ -37,12 +37,17 @@ file_path_ref <- fromJSON(file = input)
 # import the relevant parameters and references
 source(file.path(file_path_ref$project_directory, 
                  file_path_ref$sequencing$setup_script))
+```
 
+    ## Warning: package 'dplyr' was built under R version 4.2.3
+
+``` r
 robj_savefile <- file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$intersect_disease_genes)
 ```
 
 These are human external databases so get mapping from human to mouse
-```{r}
+
+``` r
 # create ensembl biomart instance 
 grcm38_101 <- biomaRt::useEnsembl(biomart="ensembl", version=101, 
                                   dataset="mmusculus_gene_ensembl")
@@ -53,11 +58,11 @@ mouse2human <- getBM(c("hsapiens_homolog_ensembl_gene", "ensembl_gene_id", "exte
                        values=unique(t2g_protein$ensembl_gene_id),
                        mart=grcm38_101) %>%
   subset(nchar(hsapiens_homolog_ensembl_gene) > 0)
-
 ```
 
 Format the ASD whole exome sequencing dataset.
-```{r}
+
+``` r
 satterstrom_asd_file <- file.path(file_path_ref$project_directory, 
                                   file_path_ref$external_data$satterstrom_asd)
 
@@ -80,15 +85,31 @@ satterstrom_risk <- unique(subset(mouse2human, hsapiens_homolog_ensembl_gene %in
 satterstrom_bkg <-  unique(subset(mouse2human, hsapiens_homolog_ensembl_gene %in% satterstrom_bkg_hs)$ensembl_gene_id)
 
 print(sprintf("Number of human genes risk: %s", length(satterstrom_risk_hs)))
-print(sprintf("Number of homologous mouse genes risk: %s", length(satterstrom_risk)))
-
-print(sprintf("Number of human genes background: %s", length(satterstrom_bkg_hs)))
-print(sprintf("Number of homologous mouse genes background: %s", length(satterstrom_bkg)))
-
 ```
 
+    ## [1] "Number of human genes risk: 105"
+
+``` r
+print(sprintf("Number of homologous mouse genes risk: %s", length(satterstrom_risk)))
+```
+
+    ## [1] "Number of homologous mouse genes risk: 102"
+
+``` r
+print(sprintf("Number of human genes background: %s", length(satterstrom_bkg_hs)))
+```
+
+    ## [1] "Number of human genes background: 17469"
+
+``` r
+print(sprintf("Number of homologous mouse genes background: %s", length(satterstrom_bkg)))
+```
+
+    ## [1] "Number of homologous mouse genes background: 16939"
+
 Format SFARI Risk genes
-```{r}
+
+``` r
 sfari_hs <- read.csv(file.path(file_path_ref$project_directory,
                   file_path_ref$external_data$sfari), 
                   stringsAsFactors = FALSE)$ensembl.id
@@ -100,12 +121,19 @@ sfari_risk <- unique(subset(mouse2human,
 sfari_bkg <- unique(t2g_protein$ensembl_gene_id)
      
 print(sprintf("Number of human genes risk: %s", length(sfari_hs)))
-print(sprintf("Number of homologous mouse genes risk: %s", length(sfari_risk)))
-                
 ```
 
+    ## [1] "Number of human genes risk: 1095"
+
+``` r
+print(sprintf("Number of homologous mouse genes risk: %s", length(sfari_risk)))
+```
+
+    ## [1] "Number of homologous mouse genes risk: 1077"
+
 Format SCHEMA rare truncating variants
-```{r}
+
+``` r
 schema_res <- read.csv(file.path(file_path_ref$project_directory,
                              file_path_ref$external_data$schema_ptv),
                    stringsAsFactors = FALSE)
@@ -123,16 +151,31 @@ schema_bkg <- unique(subset(mouse2human,
                              )$ensembl_gene_id)
   
 print(sprintf("Number of human genes risk: %s", length(schema_sig_hs)))
-print(sprintf("Number of homologous mouse genes risk: %s", length(schema_risk)))
-
-
-print(sprintf("Number of human genes background: %s", length(schema_bkg_hs)))
-print(sprintf("Number of homologous mouse genes background: %s", length(schema_bkg)))
-   
-
 ```
+
+    ## [1] "Number of human genes risk: 31"
+
+``` r
+print(sprintf("Number of homologous mouse genes risk: %s", length(schema_risk)))
+```
+
+    ## [1] "Number of homologous mouse genes risk: 25"
+
+``` r
+print(sprintf("Number of human genes background: %s", length(schema_bkg_hs)))
+```
+
+    ## [1] "Number of human genes background: 18321"
+
+``` r
+print(sprintf("Number of homologous mouse genes background: %s", length(schema_bkg)))
+```
+
+    ## [1] "Number of homologous mouse genes background: 17696"
+
 Format SCHEMA schizophrenia fine-mapping prioritized variants
-```{r}
+
+``` r
 schema_prio_res <- read.csv(file.path(file_path_ref$project_directory,
                                   file_path_ref$external_data$schema_finemap),
                         stringsAsFactors=FALSE)
@@ -143,12 +186,19 @@ schema_prio_risk <- unique(subset(mouse2human,
 
 
 print(sprintf("Number of homologous mouse genes risk: %s", length(schema_prio_risk)))
-print(sprintf("Number of homologous mouse genes background: %s", length(schema_bkg)))
-
 ```
 
+    ## [1] "Number of homologous mouse genes risk: 86"
+
+``` r
+print(sprintf("Number of homologous mouse genes background: %s", length(schema_bkg)))
+```
+
+    ## [1] "Number of homologous mouse genes background: 17696"
+
 Biopolar exome
-```{r}
+
+``` r
 # Biploar exome
 bipex_ptv_res <- read.csv(file.path(file_path_ref$project_dir,
                             file_path_ref$external_data$bipex),
@@ -170,15 +220,31 @@ bipex_ptv_bkg <- unique(subset(mouse2human,
                                )$ensembl_gene_id)
 
 print(sprintf("Number of human genes risk: %s", length(bipex_ptv_sig_hs)))
-print(sprintf("Number of homologous mouse genes risk: %s", length(bipex_ptv_risk)))
-
-print(sprintf("Number of human genes background: %s", length(bipex_ptv_bkg_hs)))
-print(sprintf("Number of homologous mouse genes background: %s", length(bipex_ptv_bkg)))
-
 ```
 
+    ## [1] "Number of human genes risk: 90"
+
+``` r
+print(sprintf("Number of homologous mouse genes risk: %s", length(bipex_ptv_risk)))
+```
+
+    ## [1] "Number of homologous mouse genes risk: 92"
+
+``` r
+print(sprintf("Number of human genes background: %s", length(bipex_ptv_bkg_hs)))
+```
+
+    ## [1] "Number of human genes background: 19993"
+
+``` r
+print(sprintf("Number of homologous mouse genes background: %s", length(bipex_ptv_bkg)))
+```
+
+    ## [1] "Number of homologous mouse genes background: 18166"
+
 Load gene sets
-```{r}
+
+``` r
 load(file.path(file_path_ref$project_directory, 
                file_path_ref$sequencing$results$all_soma_comparison))
 
@@ -186,7 +252,7 @@ load(file.path(file_path_ref$project_directory,
             file_path_ref$sequencing$results$gc_vs_gcf_comparison))
 ```
 
-```{r}
+``` r
 # function to perform fishers exact test
 run_fishers <- function(disease_genes, expressed_genes, universe) {
 
@@ -256,11 +322,11 @@ disease_gene_df <- all_combos %>%
 
 csv_savefile <- gsub(".RData", ".csv", robj_savefile)
 write.csv(disease_gene_df, file=csv_savefile)
-  
 ```
 
 Plot the result
-```{r}
+
+``` r
 plt <- ggplot(fishers_res, aes(odds_ratio, disease_group, xmin=CI_low, xmax=CI_high, color=express_group)) + 
     geom_point(position=position_dodge(0.5), size=1) +
     geom_errorbar(position=position_dodge(0.5), width=0.2, size=0.5) +
@@ -272,6 +338,16 @@ plt <- ggplot(fishers_res, aes(odds_ratio, disease_group, xmin=CI_low, xmax=CI_h
     ylab("") +
     xlab("Odds Ratio") +
   theme(legend.position="none")
+```
 
+    ## Warning: Using `size` aesthetic for lines was deprecated in ggplot2 3.4.0.
+    ## ℹ Please use `linewidth` instead.
+    ## This warning is displayed once every 8 hours.
+    ## Call `lifecycle::last_lifecycle_warnings()` to see where this warning was
+    ## generated.
+
+``` r
 plt
 ```
+
+![](figure2_disease_gene_analysis_files/figure-gfm/unnamed-chunk-10-1.png)<!-- -->

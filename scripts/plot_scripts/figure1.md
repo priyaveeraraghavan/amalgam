@@ -1,15 +1,9 @@
----
-title: "Figure1_Analysis"
-author: "Priya Veeraraghavan"
-date: "2023-03-25"
-output: github_document
----
+Figure1_Analysis
+================
+Priya Veeraraghavan
+2023-03-25
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message=FALSE, warnings=FALSE)
-```
-
-```{r}
+``` r
 library(rjson)
 input <- "C:/Users/prv892/Documents/GitHub/amalgam/metadata.json"
 
@@ -18,13 +12,18 @@ file_path_ref <- fromJSON(file = input)
 # import the relevant parameters and references
 source(file.path(file_path_ref$project_directory, 
                  file_path_ref$sequencing$setup_script))
+```
 
+    ## Warning: package 'dplyr' was built under R version 4.2.3
+
+``` r
 source(file.path(file_path_ref$project_directory,
                  file_path_ref$plots$setup_script))
 ```
 
 # Main figure
-```{r, fig.width=4.6, fig.height=3.3, fig.fullwidth=FALSE}
+
+``` r
 plot_main_1d <- function(plot_savefile) {
   load(file.path(file_path_ref$project_directory,
                  file_path_ref$sequencing$results$all_dpc23_comparison))
@@ -53,10 +52,12 @@ plot_main_1d(file.path(file_path_ref$project_directory,
                        file_path_ref$plots$plot_directory, "main_1d.pdf"))
 ```
 
-The genes chosen for labeling have previously been described as being localized
-and/or with localization elements already determined
+![](figure1_files/figure-gfm/unnamed-chunk-2-1.png)<!-- -->
 
-```{r, fig.width=5.3, fig.height=5.3, fig.fullwidth=FALSE}
+The genes chosen for labeling have previously been described as being
+localized and/or with localization elements already determined
+
+``` r
 plot_main_1e <- function(plot_savefile) {
   load(file.path(file_path_ref$project_directory,
                               file_path_ref$sequencing$results$gc_vs_soma_dpc23_comparison))
@@ -115,8 +116,9 @@ plot_main_1e(file.path(file_path_ref$project_directory,
                        file_path_ref$plots$plot_directory, "main_1e.pdf"))
 ```
 
+![](figure1_files/figure-gfm/unnamed-chunk-3-1.png)<!-- -->
 
-```{r, fig.width=6.1, fig.height=6.1, fig.fullwidth=FALSE}
+``` r
 plot_main_1f <- function(plot_savefile) {
   
   load(file.path(file_path_ref$project_directory,
@@ -150,3 +152,4 @@ plot_main_1f(file.path(file_path_ref$project_directory,
                        file_path_ref$plots$plot_directory, "main_1f.pdf"))
 ```
 
+![](figure1_files/figure-gfm/unnamed-chunk-4-1.png)<!-- -->

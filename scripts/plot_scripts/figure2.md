@@ -1,16 +1,15 @@
----
-title: "Figure2_Analysis"
-author: "Priya Veeraraghavan"
-date: "2023-03-26"
-output: github_document
----
+Figure2_Analysis
+================
+Priya Veeraraghavan
+2023-03-26
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message=FALSE, warnings=FALSE)
+``` r
+library(circlize)
 ```
 
-```{r}
-library(circlize)
+    ## Warning: package 'circlize' was built under R version 4.2.3
+
+``` r
 library(rjson)
 
 input <- "C:/Users/prv892/Documents/GitHub/amalgam/metadata.json"
@@ -20,14 +19,18 @@ file_path_ref <- fromJSON(file = input)
 # import the relevant parameters and references
 source(file.path(file_path_ref$project_directory, 
                  file_path_ref$sequencing$setup_script))
+```
 
+    ## Warning: package 'dplyr' was built under R version 4.2.3
+
+``` r
 source(file.path(file_path_ref$project_directory,
                  file_path_ref$plots$setup_script))
 ```
 
-
 # Main figure
-```{r, width=5.2, height=4.8, fig.fullwidth=FALSE}
+
+``` r
 # volcano GC subtypes
 plot_main_2a <- function(plot_savefile) {
   
@@ -79,7 +82,9 @@ plot_main_2a(file.path(file_path_ref$project_directory,
                        file_path_ref$plots$plot_directory, "main_2a.pdf"))
 ```
 
-```{r, width=5.2, height=5.2, fig.fullwidth=FALSE}
+![](figure2_files/figure-gfm/unnamed-chunk-2-1.png)<!-- -->
+
+``` r
 # quadrant plot subtypes
 plot_main_2b <- function(plot_savefile) {
   
@@ -140,7 +145,9 @@ plot_main_2b(file.path(file_path_ref$project_directory,
                        file_path_ref$plots$plot_directory, "main_2b.pdf"))
 ```
 
-```{r, width=6.3, height=4.7, fig.fullwidth=FALSE}
+![](figure2_files/figure-gfm/unnamed-chunk-3-1.png)<!-- -->
+
+``` r
 # upset plot
 plot_main_2c <- function(plot_savefile) {
   
@@ -208,15 +215,16 @@ plot_main_2c(file.path(file_path_ref$project_directory,
                        file_path_ref$plots$plot_directory, "main_2c.pdf"))
 ```
 
-```{r, width=1.5, width=1.5, fig.fullwidth=FALSE}
+![](figure2_files/figure-gfm/unnamed-chunk-4-1.png)<!-- -->
+
+``` r
 # boxplots example genes (???)
 plot_main_2d <- function(plot_savefile) {
   
 }
 ```
 
-
-```{r, width=3.2, width=5.1, fig.fullwidth=FALSE}
+``` r
 # disease gene forest plot
 plot_main_2e <- function(plot_savefile) {
   
@@ -246,8 +254,9 @@ plot_main_2e(file.path(file_path_ref$project_directory,
                        file_path_ref$plots$plot_directory, "main_2e.pdf"))
 ```
 
+![](figure2_files/figure-gfm/unnamed-chunk-6-1.png)<!-- -->
 
-```{r, width=2.8, width=6.3, fig.fullwidth=FALSE}
+``` r
 # go terms gc subtype
 
 plot_main_2f <- function(plot_savefile) {
@@ -272,7 +281,9 @@ plot_main_2f(file.path(file_path_ref$project_directory,
                        file_path_ref$plots$plot_directory, "main_2f.pdf"))
 ```
 
-```{r, width=5.9, height=5.3, fig.fullwidth=FALSE}
+![](figure2_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
+
+``` r
 # chord plot
 plot_main_2g <- function(plot_savefile) {
   
@@ -328,3 +339,5 @@ plot_main_2g(file.path(file_path_ref$project_directory,
                        file_path_ref$plots$plot_directory,
                        "main_2g.pdf"))
 ```
+
+![](figure2_files/figure-gfm/unnamed-chunk-8-1.png)<!-- -->
