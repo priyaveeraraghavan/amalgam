@@ -1,0 +1,44 @@
+{
+	"project_directory": "C:/Users/prv892/Documents/GitHub/amalgam",
+	"sequencing" : {
+		"metadata": "data/sequencing_metadata.xlsx",
+		"salmon_directory": "data/sequencing/salmon_align",
+		"setup_script": "scripts/ngs_scripts/setup.R",
+		"results" : {
+			"all_dge_results" : "data/sequencing/differential_expression/all_dge_results.xlsx",
+			"all_dge_go_results" : "data/sequencing/differential_expression/all_dge_go_results.xlsx",
+			"all_soma_comparison" : "data/sequencing/differential_expression/all_soma_comparison.RData",
+			"dpc23_soma_comparison" : "data/sequencing/differential_expression/dpc23_soma_comparison.RData",
+			"cpn_soma_comparison" : "data/sequencing/differential_expression/cpn_soma_comparison.RData",
+			"cthpn_soma_comparison" : "data/sequencing/differential_expression/cthpn_soma_comparison.RData",
+			"soma_filter_gc_genes" : "data/sequencing/differential_expression/soma_filter_gc_genes.RData",
+			"gc_vs_gcf_comparison" : "data/sequencing/differential_expression/gc_vs_gcf_comparison.RData",
+			"gcf_comparison" : "data/sequencing/differential_expression/gcf_comparison.RData",
+			"dpc23_gcs_pairwise_go" : "data/sequencing/differential_expression/dpc23_gcs_pairwise_go.RData",
+			"dpc23_cpn_vs_dpc21_cth_gcs_pairwise_go" : "data/sequencing/differential_expression/dpc23_cpn_vs_dpc21_cth_gcs_pairwise_go.RData",
+			"cpn_gcs_pairwise_go" : "data/sequencing/differential_expression/cpn_gcs_pairwise_go.RData",
+			"cth_gcs_pairwise_go" : "data/sequencing/differential_expression/cth_gcs_pairwise_go.RData",
+			"dpc23_gcs_comparison" : "data/sequencing/differential_expression/dpc23_gcs_comparison.RData",
+			"dpc3_cpn_dpc21_cth_gc_comparison": "data/sequencing/differential_expression/dpc23_cpn_vs_dpc21_cth_gc_comparison.RData",
+			"all_dpc23_comparison" : "data/sequencing/differential_expression/all_dpc23_comparison.RData",
+			"gc_vs_soma_dpc23_comparison" : "data/sequencing/differential_expression/gc_vs_soma_dpc23_comparison.RData",
+			"all_gc_comparison" : "data/sequencing/differential_expression/all_gc_comparison.RData",
+			"cth_gc_comparison": "data/sequencing/differential_expression/cth_gc_comparison.RData",
+			"cpn_gc_comparison": "data/sequencing/differential_expression/cpn_gc_comparison.RData",
+			"intersect_disease_genes" : "data/sequencing/differential_expression/intersect_disease_genes.RData"
+		}
+	},
+	"external_data": {
+		"satterstrom_asd" : "data/external_data/Satterstrom_ASD_WES_Cell_2021_Table_S2.xlsx",
+		"sfari" : "data/external_data/SFARI-Gene_genes_11-07-2022.csv",
+		"schema_ptv": "data/external_data/SCHEMA_Schizophrenia_results_2022_04_12_18_25_15.csv",
+		"schema_finemap" : "data/external_data/Trubetskoy_etal_Nature_2022_Prioritized_Schizophrenia.csv",
+		"bipex" : "data/external_data/Palmer_NatGen_2022_Bipolar_Disorder_results_2022_04_12_18_47_43.csv"
+
+	},
+	"plots" : {
+		"setup_script" : "scripts/plot_scripts/plot_helper.R",
+		"plot_directory" : "figures/illustrator_pdfs",
+		"figure1_script" : "scripts/plot_scripts/figure1.Rmd"
+	}
+}

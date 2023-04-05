@@ -1,0 +1,1876 @@
+---
+title: "Amalgam DGE Analysis"
+author: "Priya Veeraraghavan"
+date: "2023-03-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+#### perform DGE
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(tximport)
+library(DESeq2)
+library(readxl)
+library(pheatmap)
+library(RColorBrewer)
+library(clusterProfiler)
+library(org.Mm.eg.db)
+library(oneclust) # colorblind palette
+library(ggpubr)
+library(ggrepel)
+library(knitr)
+library(gridExtra)
+library(ggExtra)
+library(stringr)
+library(ggupset)
+library(ggrastr)
+library(GO.db)
+library(transite)
+library(rjson)
+library(xlsx)
+library(vsn)
+```
+
+# args = commandArgs(trailingOnly=TRUE)
+# input <- args[1]
+```{r}
+input <- "C:/Users/prv892/Documents/GitHub/amalgam/metadata.json"
+
+file_path_ref <- fromJSON(file = input)
+
+# import the relevant parameters and references
+source(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$setup_script))
+
+# create differential expression directory
+dir.create(file.path(file_path_ref$project_directory, 
+                     dirname(file_path_ref$sequencing$results[[1]])),
+           recursive=TRUE)
+
+## Files created from this script
+
+all_soma_file <- file.path(file_path_ref$project_directory, 
+                           file_path_ref$sequencing$results$all_soma_comparison)
+
+
+soma_filter_gc_genes_file <-
+  file.path(file_path_ref$project_directory,
+            file_path_ref$sequencing$results$soma_filter_gc_genes)
+
+
+
+gc_vs_gcf_comparison_file <- 
+  file.path(file_path_ref$project_directory, 
+            file_path_ref$sequencing$results$gc_vs_gcf_comparison)
+
+gcf_vs_gcf_file <- 
+  file.path(file_path_ref$project_directory,
+            file_path_ref$sequencing$results$gcf_comparison)
+
+
+```
+
+```{r, error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+my_func <- function() {
+  res <- matrix(c(0.5, 1, 2, 0.5), nrow=2)
+  rownames(res) <- c("A", "B")
+  colnames(res) <- c("A", "C")
+  pheatmap(res)
+  
+  ggplot(data.frame(res), aes(A, C)) + geom_point()
+}
+
+my_func()
+```
+
+Helper functions
+```{r, error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+import_files_bygene <- function(metadata_subset, 
+                                data_dir=salmon_dir, 
+                                txpt2gene=t2g_protein[,c("target_id", 
+                                                         "ensembl_gene_id")]) {
+  sample_ids <- metadata_subset$sample_id
+  files <- file.path(data_dir, sample_ids, "quant.sf")
+  names(files) <- sample_ids
+
+  #print(files[!file.exists(files)])
+
+  # load counts with tximport
+  txi.g <- tximport::tximport(files, type="salmon", 
+                    tx2gene=txpt2gene, ignoreTxVersion = TRUE)
+  
+  return(txi.g)
+}
+
+# Run DESeq on the gene level
+run_deseq2_gene <- function(metadata_subset,
+                       model_string,
+                       data_dir=salmon_dir,
+                       txpt2gene=t2g_protein[,c("target_id", 
+                                                "ensembl_gene_id")],
+                       gene_subset=unique(t2g_protein$ensembl_gene_id)) {
+  
+
+  txi.g <- import_files_bygene(metadata_subset, data_dir, txpt2gene)
+  
+  # create DESeq object
+  dds <- DESeq2::DESeqDataSetFromTximport(txi.g, 
+                                  colData=metadata_subset, 
+                                  design=as.formula(model_string))
+  
+  # get the gene subset
+  genes_to_quantify <- intersect(gene_subset, rownames(txi.g$abundance))
+  dds <- dds[genes_to_quantify,]
+  
+  # run deseq
+  dds <- DESeq2::DESeq(dds)
+  
+  return(dds)
+}
+
+# get dataframe with results for a given factor
+get_annotate_result <- function(dds, 
+                                result_name, 
+                                result_suffix="", 
+                                t2g=t2g_protein,
+                                id_type="ensembl_gene_id",
+                                alt_hypothesis="greaterAbs",
+                                lfc_thresh=0) {
+  
+  # get the result
+  dds_res <- DESeq2::results(dds, name=result_name, 
+                             altHypothesis = alt_hypothesis,
+                             lfcThreshold = lfc_thresh)
+  
+  # make it a dataframe
+  res_df <- data.frame(dds_res)
+  
+  # augment the column names
+  colnames(res_df) <- sprintf("%s.%s", colnames(res_df), result_suffix)
+  
+  # add gene identifier column
+  res_df$id <- rownames(res_df)
+  
+  # meld that identifier with t2g
+  id_info <- unique(
+    t2g_protein[, unique(c(id_type, "ensembl_gene_id", "external_gene_name"))])
+  
+  res_df <- id_info %>% inner_join(res_df, by=c("ensembl_gene_id" = "id"))
+  
+  return(res_df)
+}
+
+# write a list of deseq results to file from get_annotate_result()
+# input needs to be a list of objects that contain "res_df"
+write_deseq_results_file <- function(dds_res_lst, outfile_name) {
+  agg_res <- data.frame(purrr::reduce(lapply(dds_res_lst, function(x) x$res_df), 
+                inner_join))
+  
+  write.csv(agg_res, outfile_name)
+}
+
+# run Geneset enrichment analysis on deseq result
+# assumes gene-wise deseq result with ensembl annotation
+run_gse_dds_res <- function(res) {
+  
+
+  log2fc_lst <- res$log2FoldChange
+  names(log2fc_lst) <- rownames(res)
+  
+  log2fc_sorted <- sort(log2fc_lst, decreasing=TRUE)
+  
+  gse_res <- setReadable(clusterProfiler::gseGO(log2fc_sorted,
+                                    ont="ALL", OrgDb = org.Mm.eg.db, 
+                                    keyType="ENSEMBL"),
+                        OrgDb = org.Mm.eg.db, keyType="ENSEMBL")
+  
+  return(gse_res)
+  
+  
+}
+
+
+plot_loadings_PCA <- function(vst_valid_genes) {
+  
+  eigenvectors <- data.frame(prcomp(
+    t(assay(vst_valid_genes)))$rotation)
+  
+  eigenvectors$ensembl_gene_id <- rownames(eigenvectors)
+  
+  eigenvectors <- eigenvectors %>% inner_join(ens2ext)
+  
+  #print(ggplot(eigenvectors, aes(PC1)) + geom_density())
+  pc1_pos <- slice_max(eigenvectors, PC1, n=10)
+  pc1_neg <- slice_min(eigenvectors, PC1, n=10)
+  
+  #print(ggplot(eigenvectors, aes(PC2)) + geom_density())
+  pc2_pos <- slice_max(eigenvectors, PC2, n=10)
+  pc2_neg <- slice_min(eigenvectors, PC2, n=10)
+  
+  plot(ggplot(subset(eigenvectors, 
+                external_gene_name %in% union(
+                  union(pc1_pos$external_gene_name, pc1_neg$external_gene_name),
+                  union(pc2_pos$external_gene_name, pc2_neg$external_gene_name))),
+         aes(PC1, PC2, label=external_gene_name)) +
+    geom_hline(yintercept=0) +
+    geom_vline(xintercept=0) +
+    geom_text() + 
+    ggtitle("Genes With Highest PC1/PC2 Loadings") +
+      theme_classic())
+}
+
+# naming function for consistency
+name_gc_vs_gcf <- function(stype, loc, dev_stage, bkg) {
+  return(sprintf("%s_%s_%s.vs.%s", stype, loc, dev_stage, bkg))
+}
+
+```
+
+# Soma
+## All Soma: Counts Filtration, Global Metrics
+```{r, error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+#### More specific functions for comparing types of samples
+### Soma
+compare_all_soma <- function(robj_savefile) {
+  
+  tpm_thresh <- 2
+  metadata_subset <- subset(metadata, location == "Soma")
+  
+  txi <- import_files_bygene(metadata_subset)
+  
+  tpm <- data.frame(txi$abundance)
+  
+  tpm$ensembl_gene_id <- rownames(tpm)
+  tpm_long <- tpm %>% pivot_longer(starts_with("C"),
+                                   names_to = "sample_id", 
+                                   values_to = "TPM") %>%
+    inner_join(metadata_subset, by="sample_id")
+
+  # calculate number of samples w/ geq x counts
+  tpm_long_thresh <- tpm_long %>%
+    group_by(subtype, stage, location, ensembl_gene_id) %>%
+    summarize(num_geq_thresh=sum(TPM > tpm_thresh),
+              prop_geq_thresh=sum(TPM > tpm_thresh)/length(TPM),
+              mean_tpm=mean(TPM),
+              sem_tpm=sd(TPM)/sqrt(length(TPM)))
+  
+  cpn_soma_valid_genes <- unique(subset(tpm_long_thresh,
+                                        prop_geq_thresh > 2/3 & subtype == "CPN")$ensembl_gene_id)
+  print(sprintf("Number of CPN valid genes: %s", length(cpn_soma_valid_genes)))
+  
+  cth_soma_valid_genes <- unique(subset(tpm_long_thresh,
+                                        prop_geq_thresh > 2/3 & subtype == "CThPN")$ensembl_gene_id)
+  print(sprintf("Number of CThPN valid genes: %s", length(cth_soma_valid_genes)))
+  
+  # create a wide form of the table to later save
+  tpm_long_thresh <- tpm_long_thresh %>%
+    rowwise() %>%
+    mutate(CThPN_Soma_Valid_Gene=ensembl_gene_id %in% cth_soma_valid_genes,
+           CPN_Soma_Valid_Gene=ensembl_gene_id %in% cpn_soma_valid_genes)
+  
+   
+  # normalize counts using DESeq in order to get the PCA and heatmap
+  dds <- DESeq2::DESeqDataSetFromTximport(txi, 
+                                          colData = metadata_subset, 
+                                          design=~subtype+stage+subtype:stage)
+  dds <- dds[union(cpn_soma_valid_genes, cth_soma_valid_genes),]
+  dds <- DESeq2::DESeq(dds)
+  
+  # the filtration steps
+  ggplot(tpm_long_thresh %>% subset(subtype == "CPN"), 
+               aes(mean_tpm, color=CPN_Soma_Valid_Gene)) +
+          geom_density() + 
+          scale_color_manual(values=c(background_color, cpn_color)) + 
+          facet_wrap(vars(stage))+
+          scale_x_log10() +
+          theme_classic()+
+          ggtitle("Filtering for Expression: CPN Soma Genes")
+  
+  ggplot(tpm_long_thresh %>% subset(subtype == "CThPN"), 
+               aes(mean_tpm, color=CThPN_Soma_Valid_Gene)) +
+          geom_density() + 
+          scale_color_manual(values=c(background_color, cthpn_color)) + 
+          facet_wrap(vars(stage))+
+          scale_x_log10() +
+          theme_classic()+
+          ggtitle("Filtering for Expression: CThPN Soma Genes")
+  
+  
+  # variance stabilizing transform
+  vsd <- vst(dds, blind=FALSE)
+  meanSdPlot(assay(vsd))
+  
+  # pca
+  plot(plotPCA(vsd, intgroup=c("subtype", "stage")))
+  
+  # hierarchical clustering
+  correlation <- cor(assay(vsd))
+  annotation_heatmap <- data.frame(sample_type=metadata_subset$sample_type)
+  rownames(annotation_heatmap) <- rownames(correlation)
+  pheatmap(correlation, annotation_row = annotation_heatmap)
+  
+  
+  ## Save data
+  # excel files
+  print("Saving csv file")
+  csv_file <- gsub(".RData", ".csv", robj_savefile)
+  write.csv(tpm_long_thresh, file=csv_file)
+  
+  print("Saving RData file")
+  save(dds, tpm_long, tpm_long_thresh, 
+       cth_soma_valid_genes, cpn_soma_valid_genes, 
+       file=robj_savefile)
+  
+}
+
+compare_all_soma(all_soma_file)
+
+```
+
+```{r, error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+
+compare_dpc23_soma <- function(all_soma_robj_savefile, 
+                               robj_savefile) {
+  load(all_soma_robj_savefile)
+  
+  metadata_subset <- subset(metadata, location == "Soma" & stage == "DPC23")
+  
+  dds <- run_deseq2_gene(metadata_subset, "~subtype", 
+                         gene_subset = union(cpn_soma_valid_genes, 
+                                             cth_soma_valid_genes))
+  dds_res <- results(dds, name="subtype_CThPN_vs_CPN")
+  
+  dge_res <- row2col_ensgene(dds_res) %>%
+    inner_join(ens2ext) %>%
+    rowwise() %>% 
+    mutate(CPN_Enriched=padj < 0.05 & log2FoldChange < -1,
+           CThPN_Enriched=padj < 0.05 & log2FoldChange > 1)
+  
+  # gsea
+  gsea_res <- run_gse_dds_res(dds_res)
+  
+  
+  # plots
+  vsd <- vst(dds, blind=FALSE)
+  meanSdPlot(assay(vsd))
+ 
+  plot(plotPCA(vsd, intgroup=c("subtype")))
+  
+  # MA plot
+  print("MA plot")
+  plot(ggplot(dge_res, aes(baseMean, log2FoldChange)) +
+          geom_point(color=background_color) +
+          geom_point(data=subset(dge_res, CPN_Enriched),
+                     mapping=aes(baseMean, log2FoldChange),
+                     color=cpn_color) +
+          geom_point(data=subset(dge_res, CThPN_Enriched),
+                     mapping=aes(baseMean, log2FoldChange),
+                     color=cthpn_color) +
+          scale_x_log10())
+  
+  # volcano plot
+  plot(ggplot(dge_res, aes(log2FoldChange, -log10(padj))) +
+          geom_point(color=background_color) +
+          geom_point(data=subset(dge_res, CPN_Enriched),
+                     mapping=aes(log2FoldChange, -log10(padj)),
+                     color=cpn_color) +
+          geom_point(data=subset(dge_res, CThPN_Enriched),
+                     mapping=aes(log2FoldChange, -log10(padj)),
+                     color=cthpn_color))
+  
+  plot(ridgeplot(gsea_res, showCategory=18, label_format = 90) + 
+         ggtitle("CPN <- GSEA -> CThPN"))
+  
+
+  ### Save data
+  # write the CSV files
+  csv_savefile <- gsub(".RData", "_DGE.csv", robj_savefile)
+  write.csv(dge_res, file=csv_savefile)
+  
+  csv_savefile2 <- gsub(".RData", "_GSEA.csv", robj_savefile)
+  write.csv(gsea_res@result, file=csv_savefile2)
+  
+  save(dds, dge_res, gsea_res, file=robj_savefile)
+ 
+}
+
+compare_dpc23_soma(all_soma_file,
+                   file.path(file_path_ref$project_directory, 
+                             file_path_ref$sequencing$results$dpc23_soma_comparison))
+
+```
+
+```{r, error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+
+compare_cpn_soma <- function(all_soma_robj_savefile, robj_savefile) {
+  load(all_soma_robj_savefile)
+  print(robj_savefile)
+  metadata_subset <- subset(metadata, location == "Soma" & subtype == "CPN")
+  
+  dds <- run_deseq2_gene(metadata_subset, "~stage", 
+                         gene_subset = cpn_soma_valid_genes)
+  
+  dds_res <- results(dds, name="stage_DPC23_vs_DPC21")
+  
+  dge_res <- row2col_ensgene(dds_res) %>%
+    inner_join(ens2ext) %>%
+    rowwise() %>%
+    mutate(CPN_Soma_DPC21_High=padj < 0.05 & log2FoldChange < -1,
+           CPN_Soma_DPC23_High=padj < 0.05 & log2FoldChange > 1)
+  
+  gsea_res <- run_gse_dds_res(dds_res)
+  
+  # variance stabilize 
+  vsd <- vst(dds, blind=FALSE)
+  meanSdPlot(assay(vsd))
+ 
+  # pca
+  plot(plotPCA(vsd, intgroup=c("stage")))
+  
+  # ma plot
+  plot(ggplot(dge_res %>% arrange(desc(padj)) %>% drop_na(), 
+              aes(baseMean, log2FoldChange, color=padj < 0.05)) +
+         geom_point() +
+         scale_x_log10() + 
+         geom_hline(yintercept = -1, linetype="dashed") + 
+         geom_hline(yintercept = 1, linetype = "dashed") +
+         ggtitle("CPN Soma DPC23/DPC21 MA plot") +
+         scale_color_manual(values=c(background_color, cpn_color))) 
+  
+  plot(ggplot(dge_res, aes(log2FoldChange, -log10(padj), color=padj < 0.05)) +
+          geom_point() +
+          geom_hline(yintercept=-log10(0.05)) +
+          geom_vline(xintercept = -1, linetype="dashed") + 
+          geom_vline(xintercept = 1, linetype = "dashed") +
+          ggtitle("CPN Soma DPC23/DPC21 Volcano Plot") +
+                  scale_color_manual(values=c(background_color, cpn_color)))
+  plot(ridgeplot(gsea_res, 
+                 showCategory=18,
+                  label_format=90) + 
+         ggtitle("DPC21 <- CPN Soma GSEA -> DPC23"))
+  
+  
+  ## save tables
+  csv_savefile <- gsub(".RData", "_DGE.csv", robj_savefile)
+  write.csv(dge_res, file=csv_savefile)
+  
+  csv_savefile2 <- gsub(".RData", "_GSEA.csv", robj_savefile)
+  write.csv(gsea_res@result, file=csv_savefile2)
+
+  
+  save(dds, dge_res, gsea_res, file=robj_savefile)
+  
+}
+
+compare_cpn_soma(all_soma_file,
+                 file.path(file_path_ref$project_directory, 
+                           file_path_ref$sequencing$results$cpn_soma_comparison))
+
+```
+
+
+
+```{r, error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+
+compare_cth_soma <- function(all_soma_robj_savefile, robj_savefile) {
+  load(all_soma_robj_savefile)
+  
+  metadata_subset <- subset(metadata, 
+                            location == "Soma" & subtype == "CThPN") 
+  
+  dds <- run_deseq2_gene(metadata_subset, "~stage", 
+                         gene_subset = cth_soma_valid_genes)
+  
+  
+  dds_res <- results(dds, name="stage_DPC23_vs_DPC21")
+  
+  dge_res <- row2col_ensgene(dds_res) %>%
+    inner_join(ens2ext) %>%
+    rowwise() %>%
+    mutate(CThPN_Soma_DPC21_High=padj < 0.05 & log2FoldChange < -1,
+           CThPN_Soma_DPC23_High=padj < 0.05 & log2FoldChange > 1)
+  
+  gsea_res <- run_gse_dds_res(dds_res)
+  
+  # variance stabilize 
+  vsd <- vst(dds, blind=FALSE)
+  meanSdPlot(assay(vsd))
+ 
+  # pca
+  plot(plotPCA(vsd, intgroup=c("stage")))
+  
+  # ma plot
+  plot(ggplot(dge_res %>% arrange(desc(padj)) %>% drop_na(), 
+              aes(baseMean, log2FoldChange, color=padj < 0.05)) +
+         geom_point() +
+         scale_x_log10() + 
+         geom_hline(yintercept = -1, linetype="dashed") + 
+         geom_hline(yintercept = 1, linetype = "dashed") +
+         ggtitle("CThPN Soma DPC23/DPC21 MA plot") +
+         scale_color_manual(values=c(background_color, cthpn_color)))
+  
+
+  plot(ggplot(dge_res, aes(log2FoldChange, -log10(padj), color=padj < 0.05)) +
+          geom_point() +
+          geom_hline(yintercept=-log10(0.05)) +
+          geom_vline(xintercept = -1, linetype="dashed") + 
+          geom_vline(xintercept = 1, linetype = "dashed") +
+          ggtitle("CThPN Soma DPC23/DPC21 Volcano Plot") +
+                  scale_color_manual(values=c(background_color, cthpn_color)))
+  
+  plot(ridgeplot(gsea_res, 
+                 showCategory=18,
+                  label_format=90) + 
+         ggtitle("DPC21 <- CThPN Soma GSEA -> DPC23"))
+  
+
+  ## save tables
+  csv_savefile <- gsub(".RData", "_DGE.csv", robj_savefile)
+  write.csv(dge_res, file=csv_savefile)
+  
+  csv_savefile2 <- gsub(".RData", "_GSEA.csv", robj_savefile)
+  write.csv(gsea_res@result, file=csv_savefile2)
+
+  
+  save(dds, dge_res, gsea_res, file=robj_savefile)
+  
+}
+
+compare_cth_soma(all_soma_file,
+                 file.path(file_path_ref$project_directory, 
+                           file_path_ref$sequencing$results$cthpn_soma_comparison))
+```
+
+
+# GC Genes
+```{r,  error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+### GC low counts filter based on soma expression-determined threshold
+soma_filter_gc_genes <- function(all_soma_robj_savefile, robj_savefile) {
+  
+  load(all_soma_robj_savefile)
+  
+  metadata_subset <- subset(metadata, location == "GC")
+  
+  txi <- import_files_bygene(metadata_subset)
+  
+  tpm <- data.frame(txi$abundance)
+  
+  tpm$ensembl_gene_id <- rownames(tpm)
+  tpm_long <- tpm %>% pivot_longer(starts_with("C"),
+                                   names_to = "sample_id", 
+                                   values_to = "TPM") %>%
+    inner_join(metadata_subset, by="sample_id")
+  
+  tpm_agg <- tpm_long %>%
+    group_by(sample_type, subtype, stage, ensembl_gene_id) %>%
+    summarize(mean_tpm=mean(TPM)) 
+  
+  # augment with soma valid data --> delineate whether gene is likely expressed by gc subtype
+  tpm_agg <- tpm_agg %>%
+    rowwise() %>%
+    mutate(is_expressed=ifelse(subtype == "CPN", 
+                               ensembl_gene_id %in% cpn_soma_valid_genes,
+                               ensembl_gene_id %in% cth_soma_valid_genes))
+  
+  tpm_long_expressed <- tpm_long %>%
+    inner_join(tpm_agg[,c("subtype", "ensembl_gene_id", "is_expressed")],
+               by=c("ensembl_gene_id", "subtype")) %>%
+    subset(is_expressed)
+
+  gc_stypes <- c("CPN_GC_DPC23", "CPN_GC_DPC21", "CThPN_GC_DPC23", "CThPN_GC_DPC21")
+  # take 95th quantile of confident "noise" genes and use this as tpm threshold
+  noise_thresh <- lapply(gc_stypes,
+                         function(stype) quantile(subset(tpm_agg, 
+                                                         sample_type == stype &
+                                                           is_expressed == FALSE)$mean_tpm,
+                                                  probs=c(0.95)))
+  names(noise_thresh) <- gc_stypes
+  
+  print(noise_thresh)
+  
+  max_noise_thresh <-  max(sapply(noise_thresh, function(x) x))
+  
+  print(max_noise_thresh)
+  # now get the above noise GC genes
+  above_noise_gc_genes <- tpm_long_expressed %>% 
+    group_by(sample_type, subtype, stage, ensembl_gene_id) %>%
+    summarize(is_valid_tpm=sum(TPM > noise_thresh[[sample_type[1]]])/length(TPM) > 2/3) %>%
+    subset(is_valid_tpm)
+  
+ 
+  print("Number of above noise gc genes: ")
+  print(above_noise_gc_genes %>% group_by(sample_type) %>% summarize(number=n()))
+                                 
+  
+  # now filter on whether gene expressed in somata
+  above_noise_soma_express_gc_genes <- above_noise_gc_genes %>%
+    rowwise() %>%
+    mutate(is_soma_valid=ifelse(grepl("CPN", sample_type), ensembl_gene_id %in% cpn_soma_valid_genes,
+                                 ensembl_gene_id %in% cth_soma_valid_genes)) %>%
+    subset(is_soma_valid)
+
+  
+  print("Number of soma expressed above noise gc genes: ")
+  print(above_noise_soma_express_gc_genes %>% group_by(sample_type) %>% summarize(number=n()))
+  
+ 
+
+  for (stype in gc_stypes) {
+    
+    filtered_genes <- subset(above_noise_soma_express_gc_genes, 
+                                 sample_type == stype)$ensembl_gene_id
+    plot(ggplot(tpm_agg %>% 
+                  subset(sample_type == stype) %>%
+                  rowwise() %>%
+                  mutate(low_counts_filter=ensembl_gene_id %in% filtered_genes),
+                aes(mean_tpm, color=low_counts_filter)) +
+           geom_density(bins=100) +
+           scale_color_manual(values=c(background_color, accent_color_dark)) +
+           ggtitle(sprintf("%s Low Counts Filter: %s Remain", stype, 
+                   length(filtered_genes))) +
+           scale_x_log10() +
+           theme_classic()
+    )
+  }
+
+                  
+  
+
+  save(above_noise_soma_express_gc_genes,
+       above_noise_gc_genes, noise_thresh, tpm_agg, file=robj_savefile)
+  
+}
+
+
+soma_filter_gc_genes(all_soma_file, 
+                     soma_filter_gc_genes_file)
+```
+
+
+### GC VS GCF
+```{r,  error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+
+
+compare_gc_vs_gcf_single <- function(stype, dev_stage, bkg, soma_filter_gc_genes_file) {
+  
+  meta_subs <- subset(metadata, 
+                      prep_type == "GC" & 
+                        ((stage ==  dev_stage & subtype == stype) | subtype == bkg))
+  
+  print(meta_subs)
+  
+  load(soma_filter_gc_genes_file)
+  gc_stype <- sprintf("%s_%s_%s", stype, "GC", dev_stage)
+  print(gc_stype)
+  # run deseq
+  dds <- run_deseq2_gene(meta_subs, "~enrichment_type", 
+                         gene_subset = subset(above_noise_gc_genes, 
+                                              sample_type == gc_stype)$ensembl_gene_id)
+  print(resultsNames(dds))
+  
+  # get the result
+  res_df <- row2col_ensgene(results(dds, name="enrichment_type_signal_vs_background",
+                    altHypothesis = "greater"))
+  
+  # plot the MA plot
+  plot(ggplot(res_df %>% arrange(desc(padj)), 
+              aes(baseMean, log2FoldChange, color=padj < 0.05)) + 
+         geom_point() +
+         scale_x_log10() +
+         scale_color_manual(values=c(background_color, accent_color_light))+
+         ggtitle(sprintf("GC: %s over GCF: %s\nGenes Enriched: %s", stype, bkg,
+                         length(subset(res_df, padj < 0.05)$ensembl_gene_id)))
+  )
+  
+  is_sig <- res_df$padj < 0.05
+  ens_gene <- res_df$ensembl_gene_id
+  
+  res_df$ensembl_gene_id <- NULL
+
+  colnames(res_df) <- sprintf("%s.%s", colnames(res_df), 
+                              name_gc_vs_gcf(stype, "GC", dev_stage, bkg))
+  
+  res_df$is_sig <- is_sig
+  res_df$ensembl_gene_id <- ens_gene
+
+
+  return(res_df)
+  
+}
+
+
+get_enriched_gc <- function(comp_df, soma_filter_gc_genes_file) {
+  
+  res_deseq <- lapply(1:nrow(comp_df),
+                      function(i) compare_gc_vs_gcf_single(
+                        comp_df$subtype[i], 
+                        comp_df$stage[i],
+                        comp_df$background[i],
+                        soma_filter_gc_genes_file
+                      ))
+  
+  
+  valid_genes_lst <- purrr::reduce(
+    lapply(res_deseq, 
+           function(df) subset(df, is_sig)$ensembl_gene_id),
+    intersect)
+  
+  res_df <- purrr::reduce(lapply(res_deseq, 
+                                      function(df) { 
+                                        df$is_sig <- NULL
+                                        return(df)
+                                        }
+                                      ),
+                          function(x, y) {
+                            merge(x, y, by="ensembl_gene_id",
+                                  all=TRUE)
+                          }
+                               )
+                      
+  
+  return(list(valid_genes=valid_genes_lst, dge_df=res_df))
+}
+
+
+compare_gc_vs_gcf_all <- function(all_soma_file, soma_filter_gc_genes_file, robj_savefile) {
+  
+  comparisons <- list(c("CPN", "DPC23", "Forebrain_Background"),
+                      c("CPN", "DPC21", "Forebrain_Background"),
+                      c("CThPN", "DPC23", "Forebrain_Background"),
+                      c("CThPN", "DPC23", "Thalamus_Background"),
+                      c("CThPN", "DPC21", "Forebrain_Background"),
+                      c("CThPN", "DPC21", "Thalamus_Background"))
+  
+  
+  comparisons_df <- data.frame(do.call(rbind, comparisons)) %>%
+    dplyr::rename(subtype=X1, stage=X2, background=X3) %>%
+    rowwise() %>% 
+    mutate(gc_type=sprintf("%s_GC_%s", subtype, stage))
+  
+  
+  stypes <- unique(comparisons_df$gc_type)
+  all_deseq <- lapply(stypes, 
+                                  function(stype) {
+                                    get_enriched_gc(subset(comparisons_df, 
+                                                           gc_type == stype), 
+                                                    soma_filter_gc_genes_file)
+                                  })
+  
+  names(all_deseq) <- stypes
+  
+  gc_enrich_dge_df <- purrr::reduce(
+    lapply(all_deseq, 
+                   function(x) x$dge_df),
+    function(x,y) {merge(x,y, all=TRUE, by="ensembl_gene_id")})
+
+  
+  gc_enrich_genes <- lapply(all_deseq, 
+                            function(x) x$valid_genes)
+  
+  # augment gc_enrich_dge_df with whether or not gene is valid in a particular GC
+  for (stype in names(gc_enrich_genes)) {
+    gc_enrich_dge_df[stype] <- sapply(gc_enrich_dge_df$ensembl_gene_id,
+                                      function(x) x %in% gc_enrich_genes[[stype]])
+  }
+  
+  gc_enrich_dge_df <- gc_enrich_dge_df %>% 
+    left_join(ens2ext, by="ensembl_gene_id")
+  
+  # intersect these gene groups
+  plot(gc_enrich_dge_df %>%
+         group_by(ensembl_gene_id) %>%
+         summarize(sample_types=list(c("CPN_GC_DPC23", "CPN_GC_DPC21", 
+                                  "CThPN_GC_DPC23", "CThPN_GC_DPC21")[
+                                    c(CPN_GC_DPC23, CPN_GC_DPC21, 
+                                  CThPN_GC_DPC23, CThPN_GC_DPC21)
+                                  ])) %>%
+         rowwise() %>%
+         mutate(len=length(sample_types)) %>%
+         subset(len > 0) %>%
+         ggplot(aes(x=sample_types)) +
+         geom_bar() +
+         scale_x_upset())
+  
+  
+  # write to csv
+  csv_savefile <- gsub(".RData", "_DGE.csv", robj_savefile)
+  write.csv(gc_enrich_dge_df, file=csv_savefile)
+  
+
+  save(all_deseq, gc_enrich_genes, gc_enrich_dge_df, file=robj_savefile)
+  print("Done")
+}
+
+
+compare_gc_vs_gcf_all(soma_filter_gc_genes_file,
+                      gc_vs_gcf_comparison_file)
+```
+
+```{r,  error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+
+## COMPARE GCFs ###
+compare_gcf <- function(soma_filter_gc_genes_file, robj_savefile) {
+  
+  meta_subs <- subset(metadata, 
+                      enrichment_type == "background")
+                     
+  print(meta_subs)
+  
+  # load the valid genes
+  load(soma_filter_gc_genes_file)
+
+  # run deseq
+  dds <- run_deseq2_gene(meta_subs, 
+                         "~sample_type")
+  print(resultsNames(dds))
+  
+  # get the result
+  res_df <- get_annotate_result(dds, "sample_type_Thalamus_GCF_DPC23_vs_Forebrain_GCF_DPC23", 
+                                name_gc_vs_gcf("Thalamus", "GCF", "DPC23", "Forebrain_GCF_DPC23"),
+                                alt_hypothesis = "lessAbs", lfc_thresh=1)
+  
+  print(head(res_df))
+  
+  constant_gcf_genes <- subset(res_df, 
+                               padj.Thalamus_GCF_DPC23.vs.Forebrain_GCF_DPC23 < 0.05)$ensembl_gene_id
+  
+  forebrain_gcf_genes <- subset(res_df, 
+                               padj.Thalamus_GCF_DPC23.vs.Forebrain_GCF_DPC23 > 0.05 & 
+                                 log2FoldChange.Thalamus_GCF_DPC23.vs.Forebrain_GCF_DPC23 < 0)$ensembl_gene_id
+  
+  thalamus_gcf_genes <- subset(res_df, 
+                                padj.Thalamus_GCF_DPC23.vs.Forebrain_GCF_DPC23 > 0.05 & 
+                                  log2FoldChange.Thalamus_GCF_DPC23.vs.Forebrain_GCF_DPC23 > 0)$ensembl_gene_id
+
+  
+  print(sprintf("Number of constant gcf genes %s", length(constant_gcf_genes)))
+  print(sprintf("Number of forebrain gcf genes %s", length(forebrain_gcf_genes)))
+  print(sprintf("Number of thalamus gcf genes %s", length(thalamus_gcf_genes)))
+  
+  save(dds, constant_gcf_genes, forebrain_gcf_genes, thalamus_gcf_genes, file=robj_savefile)
+
+}
+
+
+compare_gcf(soma_filter_gc_genes_file, 
+            gcf_vs_gcf_file)
+```
+
+```{r,  error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+#### COMPARE DPC23 Somata and GCs 
+
+compare_all_dpc23 <- function(all_soma_file,
+                              soma_filter_gc_genes_file,
+                              gc_vs_gcf_file, 
+                              robj_savefile) {
+  
+  
+  load(all_soma_file)
+  valid_genes_soma <- union(cth_soma_valid_genes, cpn_soma_valid_genes)
+  
+  load(soma_filter_gc_genes_file)
+  
+  
+  load(gc_vs_gcf_comparison_file)
+  
+  valid_genes_gc_over_gcf <- union(gc_enrich_genes$CPN_GC_DPC23, 
+          gc_enrich_genes$CThPN_GC_DPC23)
+      
+  # get unchanging gcf
+  #load(gcf_vs_gcf_file)
+  
+  metadata_subset <- subset(metadata, stage == "DPC23" & location %in% c("GC", "Soma"))
+  print(metadata_subset)
+  
+  dds_all <- run_deseq2_gene(metadata_subset,
+                             "~sample_type",
+                             data_dir=salmon_dir,
+                             txpt2gene=t2g_protein[,c("target_id", "ensembl_gene_id")],
+                             gene_subset=subset(above_noise_soma_express_gc_genes,
+                                                sample_type %in% c("CPN_GC_DPC23",
+                                                                   "CThPN_GC_DPC23"))$ensembl_gene_id)
+  
+  
+  genes_to_consider <- intersect(valid_genes_gc_over_gcf, valid_genes_soma)
+  plot(plotPCA(varianceStabilizingTransformation(dds_all)[genes_to_consider,], 
+                intgroup=c("subtype", "location")) +
+          ggtitle(paste("PCA of Most Variable 500 Genes",
+                          sprintf("Out of %s Genes Expressed in Soma",
+                                  length(genes_to_consider)),
+                         "and Above Input in GCs", sep="\n")))
+  
+  
+  
+  vst_subset <- varianceStabilizingTransformation(dds_all)[genes_to_consider,]
+  plot_loadings_PCA(vst_subset)
+  
+  
+  
+  save(dds_all, vst_subset, file=robj_savefile)
+  
+  
+}
+
+compare_all_dpc23(all_soma_file,
+                              soma_filter_gc_genes_file,
+                              gc_vs_gcf_file, 
+                              file.path(file_path_ref$project_directory,
+                              file_path_ref$sequencing$results$all_dpc23_comparison))
+
+
+```
+
+```{r,  error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+#### COMPARE DPC23 Somata and GCs 
+
+compare_gc_vs_soma <- function(all_soma_file,
+                              soma_filter_gc_genes_file,
+                              gc_vs_gcf_file, 
+                              robj_savefile) {
+  
+  
+  load(all_soma_file)
+  valid_genes_soma <- union(cth_soma_valid_genes, cpn_soma_valid_genes)
+  
+  load(soma_filter_gc_genes_file)
+  
+  
+  load(gc_vs_gcf_comparison_file)
+  
+  valid_genes_gc_over_gcf <- union(gc_enrich_genes$CPN_GC_DPC23, 
+          gc_enrich_genes$CThPN_GC_DPC23)
+      
+  # get unchanging gcf
+  #load(gcf_vs_gcf_file)
+  
+  metadata_subset <- subset(metadata, stage == "DPC23" & location %in% c("GC", "Soma") )
+  metadata_subset$location <- factor(metadata_subset$location,
+                                     levels=c("Soma", "GC"))
+  print(metadata_subset)
+  
+  dds_all <- run_deseq2_gene(metadata_subset,
+                             "~location+subtype+location:subtype",
+                             data_dir=salmon_dir,
+                             txpt2gene=t2g_protein[,c("target_id", "ensembl_gene_id")],
+                             gene_subset=subset(above_noise_soma_express_gc_genes,
+                                                sample_type %in% c("CPN_GC_DPC23",
+                                                                   "CThPN_GC_DPC23"))$ensembl_gene_id)
+  
+  print(resultsNames(dds_all))
+  
+  genes_to_consider <- intersect(valid_genes_gc_over_gcf, valid_genes_soma)
+  
+  res_dge <- row2col_ensgene(results(dds_all, name="location_GC_vs_Soma")) %>%
+    rowwise() %>% 
+    mutate(is_valid_gc=ensembl_gene_id %in% genes_to_consider,
+           is_gc_enriched=log2FoldChange > 1 & padj < 0.05,
+           is_soma_enriched=log2FoldChange < -1 & padj < 0.05) %>%
+    inner_join(ens2ext)
+  
+  plot(ggplot(subset(res_dge, is_valid_gc), 
+         aes(log2FoldChange, -log10(padj))) + 
+    geom_point())
+  
+  # perform GO term enrichment for GC-enriched vs soma-expressed
+  go_grouped <- setReadable(
+    compareCluster(list(gc_enriched_genes=subset(res_dge, is_valid_gc & is_gc_enriched)$ensembl_gene_id,
+                        neither_enriched_genes=subset(res_dge, is_valid_gc & !(is_gc_enriched | is_soma_enriched))$ensembl_gene_id,
+                        soma_enriched_genes=subset(res_dge, is_valid_gc & is_soma_enriched)$ensembl_gene_id),
+                 ont="ALL", OrgDb=org.Mm.eg.db, keyType="ENSEMBL",
+                 universe=valid_genes_soma),
+    OrgDb = org.Mm.eg.db, keyType="ENSEMBL")
+  
+  plot(dotplot(go_grouped))
+
+  # perform gsea for more vs less GC enriched
+  valid_dge <- subset(res_dge, is_valid_gc)
+  lfc_lst <- valid_dge$log2FoldChange
+  names(lfc_lst) <- valid_dge$ensembl_gene_id
+  lfc_lst <- sort(lfc_lst, decreasing=TRUE)
+  gse_res <- setReadable(gseGO(lfc_lst, ont = "ALL", 
+                               OrgDb = org.Mm.eg.db, keyType = "ENSEMBL"),
+                         OrgDb = org.Mm.eg.db, keyType = "ENSEMBL")
+  
+  plot(ridgeplot(gse_res, label_format=90))
+
+  # csv savefiles
+  csv_dge_savefile <- gsub(".RData", "_DGE.csv", robj_savefile)
+  write.csv(res_dge, file=csv_dge_savefile)
+  
+  csv_go_savefile <- gsub(".RData", "_GO.csv", robj_savefile)
+  write.csv(go_grouped@compareClusterResult, file=csv_go_savefile)
+  
+  csv_gsea_savefile <- gsub(".RData", "_GSEA.csv", robj_savefile)
+  write.csv(gse_res@result, file=csv_gsea_savefile)
+  
+  save(dds_all, res_dge, gse_res, go_grouped, file=robj_savefile)
+  
+}
+
+compare_gc_vs_soma(all_soma_file,
+                              soma_filter_gc_genes_file,
+                              gc_vs_gcf_file, 
+                              file.path(file_path_ref$project_directory,
+                              file_path_ref$sequencing$results$gc_vs_soma_dpc23_comparison))
+
+
+
+
+```
+
+```{r,  error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+#### COMPARE GCs
+# compare gc datasets in a pairwise manner, 
+# ensuring that the appropriate backgrounds are subtracted
+compare_all_gcs <- function(soma_filter_gc_genes_file, 
+                            gc_vs_gcf_file, 
+                            robj_savefile) {
+  
+  
+  load(gc_vs_gcf_comparison_file)
+  load(soma_filter_gc_genes_file)
+
+  metadata_subset <- subset(metadata, location == "GC")
+ 
+  dds_all_gc <- run_deseq2_gene(metadata_subset,
+                        "~subtype+stage+subtype:stage",
+                        data_dir=salmon_dir,
+                        txpt2gene=t2g_protein[,c("target_id", "ensembl_gene_id")],
+                        gene_subset=unique(above_noise_soma_express_gc_genes$ensembl_gene_id))
+
+  
+  
+  
+  valid_gc_genes <- intersect(union(
+    union(gc_enrich_genes$CPN_GC_DPC23, 
+          gc_enrich_genes$CThPN_GC_DPC23),
+    union(gc_enrich_genes$CPN_GC_DPC21,
+          gc_enrich_genes$CThPN_GC_DPC23)),
+    unique(above_noise_soma_express_gc_genes$ensembl_gene_id))
+  
+  
+  
+  plot(plotPCA(varianceStabilizingTransformation(dds_all_gc)[valid_gc_genes,], 
+                intgroup=c("subtype", "stage")))
+  
+  
+  vst_subset <- varianceStabilizingTransformation(dds_all_gc)[valid_gc_genes,]
+  plot_loadings_PCA(vst_subset)
+  
+  save(dds_all_gc, file=robj_savefile)
+
+  
+  
+}
+
+compare_all_gcs(soma_filter_gc_genes_file,
+                gc_vs_gcf_comparison_file, 
+                 file.path(file_path_ref$project_directory,
+                          file_path_ref$sequencing$results$all_gc_comparison))
+```
+Compare GCs based just on gene sets
+```{r}
+pairwise_compare_gene_sets <- function(all_soma_file,
+                                       gc_vs_gcf_comparison_file,
+                                       robj_savefile,
+                                       sample_type_1,
+                                       sample_type_2) {
+  
+  load(gc_vs_gcf_comparison_file)
+  
+  genes_stype_1 <- gc_enrich_genes[[sample_type_1]]
+  genes_stype_2 <- gc_enrich_genes[[sample_type_2]]
+  
+  genes_shared <- intersect(genes_stype_1, genes_stype_2)
+  genes_only_stype_1 <- setdiff(genes_stype_1, genes_stype_2)
+  genes_only_stype_2 <- setdiff(genes_stype_2, genes_stype_1)
+  
+  genelst <- list(genes_only_stype_1, genes_shared, genes_only_stype_2)
+  names(genelst) <- c(sample_type_1, "Shared", sample_type_2)
+  
+  sample_subtypes <- sapply(names(genelst), function(x) strsplit(x, "_")[[1]][1])
+
+  gene_universe <- c()
+  if ("CPN" %in% sample_subtypes) {
+    gene_universe <- union(gene_universe, cpn_soma_valid_genes)
+  }
+  if ("CThPN" %in% sample_subtypes) {
+    gene_universe <- union(gene_universe, cth_soma_valid_genes)
+  }
+  
+  
+  subtype_enrichment <- setReadable(compareCluster(genelst, 
+                                               OrgDb = org.Mm.eg.db,
+                                               ont = "ALL", keyType="ENSEMBL",
+                                               universe=gene_universe), 
+                                OrgDb = org.Mm.eg.db, keyType="ENSEMBL")
+  plot(dotplot(subtype_enrichment, showCategory=10))
+  
+  csv_savefile <- gsub(".RData", "_GO.csv", robj_savefile)
+  write.csv(subtype_enrichment@compareClusterResult, file=csv_savefile)
+  
+  save(genelst, subtype_enrichment, file=robj_savefile)
+  
+}
+```
+
+```{r}
+pairwise_compare_gene_sets(all_soma_file, 
+                           gc_vs_gcf_comparison_file,
+                           file.path(file_path_ref$project_directory,
+                          file_path_ref$sequencing$results$dpc23_gcs_pairwise_go),
+                           "CPN_GC_DPC23", "CThPN_GC_DPC23")
+```
+
+
+```{r}
+pairwise_compare_gene_sets(all_soma_file, gc_vs_gcf_comparison_file, 
+                           file.path(file_path_ref$project_directory,
+                          file_path_ref$sequencing$results$dpc23_cpn_vs_dpc21_cth_gcs_pairwise_go),
+                          "CPN_GC_DPC23", "CThPN_GC_DPC21")
+```
+
+```{r}
+pairwise_compare_gene_sets(all_soma_file, gc_vs_gcf_comparison_file, 
+                           file.path(file_path_ref$project_directory,
+                          file_path_ref$sequencing$results$cpn_gcs_pairwise_go),
+                          "CPN_GC_DPC21", "CPN_GC_DPC23")
+```
+
+```{r}
+pairwise_compare_gene_sets(all_soma_file, gc_vs_gcf_comparison_file, 
+                           file.path(file_path_ref$project_directory,
+                          file_path_ref$sequencing$results$cth_gcs_pairwise_go),
+                          "CThPN_GC_DPC21", "CThPN_GC_DPC23")
+```
+
+```{r,  error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+pairwise_gc_comparison_subtype <- function(all_soma_file, 
+                                           soma_filter_gc_genes_file,
+                                           gc_vs_gcf_file, 
+                                           gcf_vs_gcf_file,
+                                           robj_savefile,
+                                           cpn_sample_type,
+                                           cth_sample_type) {
+  
+  load(all_soma_file)
+  load(soma_filter_gc_genes_file)
+  load(gc_vs_gcf_file)
+  load(gcf_vs_gcf_file)
+  
+  
+  valid_stypes <- c(cpn_sample_type, cth_sample_type)
+  
+  metadata_subset <- subset(metadata, 
+                            sample_type %in% valid_stypes)
+
+
+  
+  dds_gc <- run_deseq2_gene(metadata_subset,
+                            "~subtype",
+                            data_dir=salmon_dir,
+                            txpt2gene = t2g_protein[,c("target_id", "ensembl_gene_id")],
+                            gene_subset=unique(subset(
+                              above_noise_soma_express_gc_genes,
+                              sample_type %in% valid_stypes)$ensembl_gene_id))
+  
+  res_gc <- row2col_ensgene(results(dds_gc, name="subtype_CThPN_vs_CPN")) %>%
+    rowwise() %>%
+    mutate(is_cth_subtype_gc=padj < 0.05 & log2FoldChange > 0,
+           is_cpn_subtype_gc=padj < 0.05 & log2FoldChange < 0) %>%
+    inner_join(ens2ext)
+  
+  
+  base_volcano <- ggplot(res_gc, aes(log2FoldChange, -log10(padj))) + 
+    geom_point(color=background_color) +
+    geom_hline(yintercept = -log10(0.05)) +
+    xlim(-5,5)
+  
+
+  res_gc <- res_gc %>%
+    rowwise() %>%
+    mutate(is_cpn_over_input=ensembl_gene_id %in% gc_enrich_genes[[cpn_sample_type]],
+           is_cth_over_input=ensembl_gene_id %in% gc_enrich_genes[[cth_sample_type]])
+  
+  plot(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_cpn_over_input),
+                                  mapping=aes(log2FoldChange, -log10(padj)),
+                                  color=cpn_color),
+                  dpi=300) +
+          ggtitle(sprintf("%s DGE Colored by CPN GC Enriched", cpn_sample_type)))
+  
+  plot(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_cth_over_input),
+                                  mapping=aes(log2FoldChange, -log10(padj)),
+                                  color=cthpn_color),
+                  dpi=300) +
+          ggtitle(sprintf("%s DGE Colored by CThPN GC Enriched", cth_sample_type)))
+  
+  plot(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_cth_over_input | is_cpn_over_input),
+                                  mapping=aes(log2FoldChange, -log10(padj)),
+                                  color=accent_color_dark), 
+                  dpi=300)+
+          ggtitle(sprintf("GCs DGE Colored by GC Enriched")))
+  
+  print("augment with info about different in GCFs")
+
+  res_gc <- res_gc %>%
+    rowwise() %>%
+    mutate(is_gcf_constant=ensembl_gene_id %in% constant_gcf_genes,
+           is_forebrain_gcf=ensembl_gene_id %in% forebrain_gcf_genes,
+           is_thalamus_gcf=ensembl_gene_id %in% thalamus_gcf_genes)
+  
+  #print(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_gcf_constant),
+  #                                mapping=aes(log2FoldChange, -log10(padj)),
+  #                                color=accent_color_dark),
+  #                dpi=300) +
+  #        ggtitle("GCs DGE Colored by GCF Constant"))
+  
+  #plot(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_gcf_constant & 
+  #                                                         (is_cpn_over_input | is_cth_over_input)),
+  #                                mapping=aes(log2FoldChange, -log10(padj)),
+  #                                color=accent_color_dark), 
+  #                dpi=300) +
+  #        ggtitle("GCs DGE Colored by GCF Constant and GC Enriched"))
+  
+  final_volcano <- base_volcano + geom_point(data=res_gc %>% subset(is_gcf_constant & 
+                                                           (is_cpn_over_input | is_cth_over_input)),
+                                  mapping=aes(log2FoldChange, -log10(padj)),
+                                  color=accent_color_dark) +
+          geom_point(data=res_gc %>% subset(is_forebrain_gcf & is_cth_over_input & is_cth_subtype_gc),
+                     mapping=aes(log2FoldChange, -log10(padj)),
+                     color=cthpn_color) +
+          geom_point(data=res_gc %>% subset(is_thalamus_gcf & is_cpn_over_input & is_cpn_subtype_gc),
+                     mapping=aes(log2FoldChange, -log10(padj)),
+                     color=cpn_color) +
+          ggtitle("GCs DGE Colored by GCF Constant and/or GC enrichment")
+  
+  
+  genes_to_label <- subset(res_gc,
+                           (is_thalamus_gcf & is_cpn_over_input & is_cpn_subtype_gc & log2FoldChange < -1) |
+                           (is_forebrain_gcf & is_cth_over_input & is_cth_subtype_gc & log2FoldChange > 1) |
+                            (-log10(padj) > 5 & abs(log2FoldChange) > 1 & is_gcf_constant & (is_cpn_over_input | is_cth_over_input)))
+  
+  plot(rasterize(final_volcano, dpi=300)  + 
+          geom_text_repel(data=genes_to_label, mapping=aes(log2FoldChange, -log10(padj), label=external_gene_name), max.overlaps = 30))
+  
+  
+  res_gc <- res_gc %>% 
+    rowwise() %>%
+    mutate(is_cpn_gc_filt=!(is_forebrain_gcf) & is_cpn_over_input & is_cpn_subtype_gc,
+           is_cth_gc_filt=!(is_thalamus_gcf) & is_cth_over_input & is_cth_subtype_gc)
+  
+  # do some go enrichment
+  cpn_gc_enriched <- subset(res_gc, is_cpn_gc_filt)$ensembl_gene_id
+  cth_gc_enriched <- subset(res_gc, is_cth_gc_filt)$ensembl_gene_id
+  
+  subtype_enrichment <- setReadable(compareCluster(list(cth_gc=cth_gc_enriched, cpn_gc=cpn_gc_enriched), 
+                                               OrgDb = org.Mm.eg.db,
+                                               ont = "ALL", keyType="ENSEMBL",
+                                               universe=union(cth_soma_valid_genes,
+                                                              cpn_soma_valid_genes)), 
+                                OrgDb = org.Mm.eg.db, keyType="ENSEMBL")
+  plot(dotplot(subtype_enrichment, showCategory=10))
+  
+  # save to csv
+  csv_savefile_dge <- gsub(".RData", "_DGE.csv", robj_savefile)
+  write.csv(res_gc, file=csv_savefile_dge)
+  
+  csv_savefile_go <- gsub(".RData", "_GO.csv", robj_savefile)
+  write.csv(subtype_enrichment@compareClusterResult, file=csv_savefile_go)
+  
+  
+  save(dds_gc, res_gc, subtype_enrichment, file=robj_savefile)
+  
+  print("Done.")
+  
+  
+
+  
+  
+}
+```
+
+```{r,  error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+pairwise_gc_comparison_subtype(all_soma_file, 
+                                           soma_filter_gc_genes_file,
+                                           gc_vs_gcf_comparison_file, 
+                                           gcf_vs_gcf_file,
+                                            file.path(file_path_ref$project_directory,
+                            file_path_ref$sequencing$results$dpc23_gcs_comparison),
+                                           "CPN_GC_DPC23",
+                                           "CThPN_GC_DPC23") 
+```
+
+```{r,  error=FALSE, warning=FALSE, message=FALSE, include=TRUE}
+pairwise_gc_comparison_subtype(all_soma_file, 
+                                           soma_filter_gc_genes_file,
+                                           gc_vs_gcf_comparison_file, 
+                                           gcf_vs_gcf_file,
+                               
+  file.path(file_path_ref$project_directory,
+            file_path_ref$sequencing$results$dpc3_cpn_dpc21_cth_gc_comparison),
+                                           "CPN_GC_DPC23",
+                                           "CThPN_GC_DPC21") 
+```
+
+
+```{r}
+
+pairwise_gc_comparison_stage <- function(all_soma_file, 
+                                           soma_filter_gc_genes_file,
+                                           gc_vs_gcf_file, 
+                                           robj_savefile,
+                                           subtype_to_compare) {
+  
+  load(gc_vs_gcf_file)
+  load(soma_filter_gc_genes_file)
+  load(all_soma_file)
+  
+  
+  metadata_subset <- subset(metadata, location == "GC" & subtype == subtype_to_compare)
+  valid_sample_types <- unique(metadata_subset$sample_type)
+  
+  dds_gc <- run_deseq2_gene(metadata_subset,
+                                "~stage",
+                                data_dir=salmon_dir,
+                                txpt2gene=t2g_protein[,c("target_id", "ensembl_gene_id")],
+                                gene_subset=subset(above_noise_soma_express_gc_genes,
+                                                   sample_type %in% valid_sample_types)$ensembl_gene_id)
+  
+    gc_res <- row2col_ensgene(results(dds_gc, name="stage_DPC23_vs_DPC21")) %>%
+    rowwise() %>%
+    mutate(is_valid_gc=ensembl_gene_id %in% union(gc_enrich_genes[[valid_sample_types[1]]],
+                                                  gc_enrich_genes[[valid_sample_types[2]]]))
+  
+  plot(rasterize(ggplot(gc_res, 
+                         aes(log2FoldChange, -log10(padj))) + 
+                    geom_point(color=background_color) + 
+                    geom_point(data=subset(gc_res, is_valid_gc), 
+                               mapping=aes(log2FoldChange, -log10(padj)),
+                               color=background_color_dark) +
+                    geom_point(data=subset(gc_res, is_valid_gc & padj < 0.05), 
+                               mapping=aes(log2FoldChange, -log10(padj)),
+                               color=accent_color_light),
+                  dpi=300))
+  
+  
+  plot(rasterize(ggplot(gc_res, 
+                         aes(baseMean, log2FoldChange)) + 
+                    geom_point(color=background_color) + 
+                    geom_point(data=subset(gc_res, is_valid_gc), 
+                               mapping=aes(baseMean, log2FoldChange),
+                               color=background_color_dark) +
+                    geom_point(data=subset(gc_res, is_valid_gc & padj < 0.05), 
+                               mapping=aes(baseMean, log2FoldChange),
+                               color=accent_color_light) +
+                    scale_x_log10(),
+                  dpi=300))
+  
+  
+  gc_res <- gc_res %>%
+    rowwise() %>%
+    mutate(P1_gc=is_valid_gc & log2FoldChange < 0 & padj < 0.05,
+           P3_gc=is_valid_gc & log2FoldChange > 0 & padj < 0.05)
+  
+  early_gc <- subset(gc_res, P1_gc)$ensembl_gene_id
+  late_gc <- subset(gc_res, P3_gc)$ensembl_gene_id
+
+  
+  gene_universe <- ifelse(subtype_to_compare == "CPN", 
+                          cpn_soma_valid_genes, cth_soma_valid_genes)
+  go_enrichment <- setReadable(compareCluster(list(P1_gc=early_gc, P3_gc=late_gc), 
+                                               OrgDb = org.Mm.eg.db,
+                                               ont = "ALL", keyType="ENSEMBL",
+                                               universe=gene_universe), 
+                                OrgDb = org.Mm.eg.db, keyType="ENSEMBL")
+  
+  plot(dotplot(go_enrichment))
+  
+  # save csv files
+  csv_dge_savefile <- gsub(".RData", "_DGE.csv", robj_savefile)
+  write.csv(gc_res, file=csv_dge_savefile)
+  
+  csv_go_savefile <- gsub(".RData", "_GO.csv", robj_savefile)
+  write.csv(go_enrichment@compareClusterResult, file=csv_go_savefile)
+  
+  
+  save(dds_gc, gc_res, go_enrichment, file=robj_savefile)
+  
+}
+```
+
+```{r}
+pairwise_gc_comparison_stage(all_soma_file, 
+                                           soma_filter_gc_genes_file,
+                                           gc_vs_gcf_comparison_file, 
+                                           file.path(file_path_ref$project_directory,
+                                                     file_path_ref$sequencing$results$cpn_gc_comparison),
+                                           "CPN")
+
+```
+
+
+```{r}
+pairwise_gc_comparison_stage(all_soma_file, 
+                                           soma_filter_gc_genes_file,
+                                           gc_vs_gcf_comparison_file, 
+                                            file.path(file_path_ref$project_directory,
+                                                     file_path_ref$sequencing$results$cth_gc_comparison),
+                                           "CThPN")
+
+```
+
+
+
+                  file.path(file_path_ref$project_directory,
+                            file_path_ref$sequencing$results$dpc23_gcs_comparison),
+                  excel_dge,
+                  excel_go)
+
+
+
+compare_dpc23_cpn_dpc21_cth(
+  all_soma_file,
+  soma_filter_gc_genes_file,
+  gc_vs_gcf_comparison_file,
+  gcf_comparison_file,
+  file.path(file_path_ref$project_directory,
+            file_path_ref$sequencing$results$dpc3_cpn_dpc21_cth_comparison),
+  excel_dge,
+  excel_go)
+
+# compares GC gene abundances directly
+# subsets to include only genes for which GCF is constant
+# or for which CPN GCs are higher despite thalamus GCF high
+# or CThPN GCs are higher despite forebrain GCF high
+compare_dpc23_gcs <- function(
+    soma_filter_gc_genes_file,
+    gc_vs_gcf_file, 
+  gcf_vs_gcf_file, 
+                              robj_savefile) {
+  
+  print(soma_filter_gc_genes_file)
+  print(gc_vs_gcf_file)
+  print(gcf_vs_gcf_file)
+  
+  print(robj_savefile)
+  
+  pdf_savefile <- gsub(".RData", ".pdf", robj_savefile)
+  pdf(pdf_savefile)
+  
+  
+  load(soma_filter_gc_genes_file)
+  metadata_subset <- subset(metadata, location == "GC" & stage == "DPC23")
+  
+  print(subset(
+    above_noise_soma_express_gc_genes,
+    sample_type %in% c("CPN_GC_DPC23", 
+                       "CThPN_GC_DPC23")))
+  
+  dds_gc <- run_deseq2_gene(metadata_subset,
+                            "~subtype",
+                            data_dir=salmon_dir,
+                            txpt2gene = t2g_protein[,c("target_id", "ensembl_gene_id")],
+                            gene_subset=unique(subset(
+                              above_noise_soma_express_gc_genes,
+                              sample_type %in% c("CPN_GC_DPC23", 
+                                                 "CThPN_GC_DPC23")
+                              )$ensembl_gene_id))
+  
+  res_gc <- row2col_ensgene(results(dds_gc, name="subtype_CThPN_vs_CPN")) %>%
+    rowwise() %>%
+    mutate(is_cth_subtype_gc=padj < 0.05 & log2FoldChange > 0,
+           is_cpn_subtype_gc=padj < 0.05 & log2FoldChange < 0) %>%
+    inner_join(ens2ext)
+  
+  
+  base_volcano <- ggplot(res_gc, aes(log2FoldChange, -log10(padj))) + 
+    geom_point(color=background_color) +
+    geom_hline(yintercept = -log10(0.05)) +
+    xlim(-5,5)
+  
+  print(rasterize(base_volcano, dpi=300))
+  
+  print("augment with info about GC enriched above input")
+  load(gc_vs_gcf_file)
+  res_gc <- res_gc %>%
+    rowwise() %>%
+    mutate(is_cpn_over_input=ensembl_gene_id %in% gc_enrich_genes$CPN_GC_DPC23,
+           is_cth_over_input=ensembl_gene_id %in% gc_enrich_genes$CThPN_GC_DPC23)
+  
+  print(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_cpn_over_input),
+                                  mapping=aes(log2FoldChange, -log10(padj)),
+                                  color=cpn_color),
+                  dpi=300) +
+          ggtitle("GCs DPC23 DGE Colored by CPN GC Enriched"))
+  
+  print(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_cth_over_input),
+                                  mapping=aes(log2FoldChange, -log10(padj)),
+                                  color=cthpn_color),
+                  dpi=300) +
+          ggtitle("GCs DPC23 DGE Colored by CThPN GC Enriched"))
+  
+  print(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_cth_over_input | is_cpn_over_input),
+                                  mapping=aes(log2FoldChange, -log10(padj)),
+                                  color=accent_color_dark), 
+                  dpi=300)+
+          ggtitle("GCs DPC23 DGE Colored by GC Enriched"))
+  
+  print("augment with info about different in GCFs")
+  load(gcf_vs_gcf_file)
+ 
+  print(thalamus_gcf_genes)
+  
+  res_gc <- res_gc %>%
+    rowwise() %>%
+    mutate(is_gcf_constant=ensembl_gene_id %in% constant_gcf_genes,
+           is_forebrain_gcf=ensembl_gene_id %in% forebrain_gcf_genes,
+           is_thalamus_gcf=ensembl_gene_id %in% thalamus_gcf_genes)
+  
+  print(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_gcf_constant),
+                                  mapping=aes(log2FoldChange, -log10(padj)),
+                                  color=accent_color_dark),
+                  dpi=300) +
+          ggtitle("GCs DPC23 DGE Colored by GCF Constant"))
+  
+  print(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_gcf_constant & 
+                                                           (is_cpn_over_input | is_cth_over_input)),
+                                  mapping=aes(log2FoldChange, -log10(padj)),
+                                  color=accent_color_dark), 
+                  dpi=300) +
+          ggtitle("GCs DPC23 DGE Colored by GCF Constant and GC Enriched"))
+  
+  final_volcano <- base_volcano + geom_point(data=res_gc %>% subset(is_gcf_constant & 
+                                                           (is_cpn_over_input | is_cth_over_input)),
+                                  mapping=aes(log2FoldChange, -log10(padj)),
+                                  color=accent_color_dark) +
+          geom_point(data=res_gc %>% subset(is_forebrain_gcf & is_cth_over_input & is_cth_subtype_gc),
+                     mapping=aes(log2FoldChange, -log10(padj)),
+                     color=cthpn_color) +
+          geom_point(data=res_gc %>% subset(is_thalamus_gcf & is_cpn_over_input & is_cpn_subtype_gc),
+                     mapping=aes(log2FoldChange, -log10(padj)),
+                     color=cpn_color) +
+          ggtitle("GCs DPC23 DGE Colored by GCF Constant and/or GC enrichment")
+  
+  
+  genes_to_label <- subset(res_gc,
+                           (is_thalamus_gcf & is_cpn_over_input & is_cpn_subtype_gc & log2FoldChange < -1) |
+                           (is_forebrain_gcf & is_cth_over_input & is_cth_subtype_gc & log2FoldChange > 1) |
+                            (-log10(padj) > 5 & abs(log2FoldChange) > 1 & is_gcf_constant & (is_cpn_over_input | is_cth_over_input)))
+  
+  print(rasterize(final_volcano, dpi=300)  + 
+          geom_text_repel(data=genes_to_label, mapping=aes(log2FoldChange, -log10(padj), label=external_gene_name), max.overlaps = 30))
+  
+  
+  
+  # do some go enrichment
+  cpn_gc_enriched <- subset(res_gc, is_thalamus_gcf & is_cpn_over_input & is_cpn_subtype_gc)$ensembl_gene_id
+  cth_gc_enriched <- subset(res_gc, is_forebrain_gcf & is_cth_over_input & is_cth_subtype_gc)$ensembl_gene_id
+  
+  subtype_enrichment <- setReadable(compareCluster(list(P3_cth_gc=cth_gc_enriched, P3_cpn_gc=cpn_gc_enriched), 
+                                               OrgDb = org.Mm.eg.db,
+                                               ont = "ALL", keyType="ENSEMBL",
+                                               universe=union(cth_soma_valid_genes,
+                                                              cpn_soma_valid_genes)), 
+                                OrgDb = org.Mm.eg.db, keyType="ENSEMBL")
+  print(dotplot(subtype_enrichment, showCategory=10))
+  
+  dev.off()
+  
+  save(dds_gc, res_gc, subtype_enrichment, file=robj_savefile)
+  
+  print("Done.")
+  
+}
+
+compare_cth_gcs <- function(gc_vs_gcf_file, 
+                            gcf_vs_gcf_file, 
+                            soma_filter_gc_genes_file,
+                            robj_soma_file,
+                            robj_savefile) {
+  
+  load(gc_vs_gcf_file)
+  load(soma_filter_gc_genes_file)
+  load(robj_soma_file)
+  
+  pdf_savefile <- gsub(".RData", ".pdf", robj_savefile)
+  pdf(pdf_savefile)
+  
+  metadata_subset <- subset(metadata, location == "GC" & subtype == "CThPN")
+  
+
+  #print(sprintf("GC valid genes removing genes that change >1 lfc in GCF: %s", length(valid_genes_gcf_constant)))
+  
+  dds_cth_gc <- run_deseq2_gene(metadata_subset,
+                                "~stage",
+                                data_dir=salmon_dir,
+                                txpt2gene=t2g_protein[,c("target_id", "ensembl_gene_id")],
+                                gene_subset=subset(above_noise_soma_express_gc_genes,
+                                                   sample_type %in% c("CThPN_GC_DPC21", "CThPN_GC_DPC23"))$ensembl_gene_id)
+  
+  cth_gc_res <- row2col_ensgene(results(dds_cth_gc, name="stage_DPC23_vs_DPC21")) %>%
+    rowwise() %>%
+    mutate(is_valid_gc=ensembl_gene_id %in% union(gc_enrich_genes$CThPN_GC_DPC23,
+                                                  gc_enrich_genes$CThPN_GC_DPC21))
+  
+  print(rasterize(ggplot(cth_gc_res, 
+                   aes(log2FoldChange, -log10(padj))) + 
+                     geom_point(color=background_color) + 
+                     geom_point(data=subset(cth_gc_res, is_valid_gc), 
+                                   mapping=aes(log2FoldChange, -log10(padj)),
+                                   color=background_color_dark) +
+                     geom_point(data=subset(cth_gc_res, is_valid_gc & padj < 0.05), 
+                               mapping=aes(log2FoldChange, -log10(padj)),
+                               color=cthpn_color),
+                    dpi=300))
+  
+  
+  print(rasterize(ggplot(cth_gc_res, 
+                         aes(baseMean, log2FoldChange)) + 
+                    geom_point(color=background_color) + 
+                    geom_point(data=subset(cth_gc_res, is_valid_gc), 
+                               mapping=aes(baseMean, log2FoldChange),
+                               color=background_color_dark) +
+                    geom_point(data=subset(cth_gc_res, is_valid_gc & padj < 0.05), 
+                               mapping=aes(baseMean, log2FoldChange),
+                               color=cthpn_color) +
+                    scale_x_log10(),
+                  dpi=300))
+           
+  
+  
+  early_cth_gc <- subset(cth_gc_res, is_valid_gc & log2FoldChange < 0 & padj < 0.05)$ensembl_gene_id
+  late_cth_gc <- subset(cth_gc_res, is_valid_gc & log2FoldChange > 0 & padj < 0.05)$ensembl_gene_id
+  
+  print(early_cth_gc)
+  print(late_cth_gc)
+ 
+  cth_enrichment <- simplify(setReadable(compareCluster(list(P1_cth_gc=early_cth_gc, P3_cth_gc=late_cth_gc), 
+                                         OrgDb = org.Mm.eg.db,
+                                         ont = "ALL", keyType="ENSEMBL",
+                                         universe=cth_soma_valid_genes), 
+                                OrgDb = org.Mm.eg.db, keyType="ENSEMBL"))
+  
+  print(dotplot(cth_enrichment, showCategory=15))
+  
+  dev.off()
+  save(dds_cth_gc, cth_gc_res, cth_enrichment, file=robj_savefile)
+  
+}
+ 
+
+compare_cpn_gcs <- function(gc_vs_gcf_file, 
+                            gcf_vs_gcf_file, 
+                            soma_filter_gc_genes_file,
+                            robj_soma_file,
+                            robj_savefile) {
+  
+  load(gc_vs_gcf_file)
+  load(soma_filter_gc_genes_file)
+  load(robj_soma_file)
+  
+  pdf_savefile <- gsub(".RData", ".pdf", robj_savefile)
+  pdf(pdf_savefile)
+  
+  metadata_subset <- subset(metadata, location == "GC" & subtype == "CPN")
+  
+  
+  dds_cpn_gc <- run_deseq2_gene(metadata_subset,
+                                "~stage",
+                                data_dir=salmon_dir,
+                                txpt2gene=t2g_protein[,c("target_id", "ensembl_gene_id")],
+                                gene_subset=subset(above_noise_soma_express_gc_genes,
+                                                   sample_type %in% c("CPN_GC_DPC21", "CPN_GC_DPC23"))$ensembl_gene_id)
+  
+  cpn_gc_res <- row2col_ensgene(results(dds_cpn_gc, name="stage_DPC23_vs_DPC21")) %>%
+    rowwise() %>%
+    mutate(is_valid_gc=ensembl_gene_id %in% union(gc_enrich_genes$CPN_GC_DPC23,
+                                                  gc_enrich_genes$CPN_GC_DPC21))
+  
+  print(rasterize(ggplot(cpn_gc_res, 
+                         aes(log2FoldChange, -log10(padj))) + 
+                    geom_point(color=background_color) + 
+                    geom_point(data=subset(cpn_gc_res, is_valid_gc), 
+                               mapping=aes(log2FoldChange, -log10(padj)),
+                               color=background_color_dark) +
+                    geom_point(data=subset(cpn_gc_res, is_valid_gc & padj < 0.05), 
+                               mapping=aes(log2FoldChange, -log10(padj)),
+                               color=cpn_color),
+                  dpi=300))
+  
+  
+  print(rasterize(ggplot(cpn_gc_res, 
+                         aes(baseMean, log2FoldChange)) + 
+                    geom_point(color=background_color) + 
+                    geom_point(data=subset(cpn_gc_res, is_valid_gc), 
+                               mapping=aes(baseMean, log2FoldChange),
+                               color=background_color_dark) +
+                    geom_point(data=subset(cpn_gc_res, is_valid_gc & padj < 0.05), 
+                               mapping=aes(baseMean, log2FoldChange),
+                               color=cpn_color) +
+                    scale_x_log10(),
+                  dpi=300))
+  
+  
+  
+  early_cpn_gc <- subset(cpn_gc_res, is_valid_gc & log2FoldChange < 0 & padj < 0.05)$ensembl_gene_id
+  late_cpn_gc <- subset(cpn_gc_res, is_valid_gc & log2FoldChange > 0 & padj < 0.05)$ensembl_gene_id
+  
+  print(early_cpn_gc)
+  print(late_cpn_gc)
+  
+  cpn_enrichment <- setReadable(compareCluster(list(P1_cpn_gc=early_cpn_gc, P3_cpn_gc=late_cpn_gc), 
+                                               OrgDb = org.Mm.eg.db,
+                                               ont = "ALL", keyType="ENSEMBL",
+                                               universe=cpn_soma_valid_genes), 
+                                OrgDb = org.Mm.eg.db, keyType="ENSEMBL")
+  
+  print(dotplot(cpn_enrichment))
+  
+  dev.off()
+  save(dds_cpn_gc, cpn_gc_res, cpn_enrichment, file=robj_savefile)
+  
+}
+
+
+
+### MAIN ###
+# create differential expression directory
+dir.create(file.path(file_path_ref$project_directory, 
+                     dirname(file_path_ref$sequencing$results[[1]])),
+           recursive=TRUE)
+
+# create excel file to record all the dge data for the supplement
+excel_dge <- file.path(file_path_ref$project_directory,
+                       file_path_ref$sequencing$results$all_dge_results)
+
+# create excel file to record all GO enrichment for the supplement
+excel_go <- file.path(file_path_ref$project_directory,
+                       file_path_ref$sequencing$results$all_dge_go_results)
+
+
+# load somata data
+# determine expression thresholds
+all_soma_file <- file.path(file_path_ref$project_directory, 
+                           file_path_ref$sequencing$results$all_soma_comparison)
+
+
+
+compare_all_soma(all_soma_file)
+
+compare_dpc23_soma(all_soma_file,
+                   file.path(file_path_ref$project_directory, 
+                             file_path_ref$sequencing$results$dpc23_soma_comparison))
+
+compare_cpn_soma(all_soma_file,
+                 file.path(file_path_ref$project_directory, 
+                           file_path_ref$sequencing$results$cpn_soma_comparison))
+
+compare_cth_soma(all_soma_file,
+                 file.path(file_path_ref$project_directory, 
+                           file_path_ref$sequencing$results$cthpn_soma_comparison),
+                 excel_dge,
+                 excel_go)
+
+
+# use somata thresholds to determine lower-bound expression thershold
+soma_filter_gc_genes_file <-
+  file.path(file_path_ref$project_directory,
+            file_path_ref$sequencing$results$soma_filter_gc_genes)
+
+soma_filter_gc_genes(all_soma_file, 
+                     soma_filter_gc_genes_file,
+                     excel_dge,
+                     excel_go)
+
+gc_vs_gcf_comparison_file <- 
+  file.path(file_path_ref$project_directory, 
+            file_path_ref$sequencing$results$gc_vs_gcf_comparison)
+
+compare_gc_vs_gcf_all(all_soma_file,
+                      soma_filter_gc_genes_file,
+                      gc_vs_gcf_comparison_file,
+                      excel_dge,
+                      excel_go)
+
+
+gcf_comparison_file <-
+  file.path(file_path_ref$project_directory,
+            file_path_ref$sequencing$results$gcf_comparison)
+
+compare_gcf(all_soma_file,
+            soma_filter_gc_genes_file,
+            gcf_comparison_file,
+            excel_dge,
+            excel_go)
+
+compare_all_dpc23(all_soma_file,
+                  soma_filter_gc_genes_file,
+                  gc_vs_gcf_comparison_file, 
+                  gcf_comparison_file, 
+                  file.path(file_path_ref$project_directory,
+                            file_path_ref$sequencing$results$all_dpc23_comparison),
+                  excel_dge,
+                  excel_go)
+
+
+compare_all_gcs(all_soma_file,
+                soma_filter_gc_genes_file,
+                gc_vs_gcf_comparison_file, 
+                file.path(file_path_ref$project_directory,
+                          file_path_ref$sequencing$results$all_gc_comparison),
+                excel_dge,
+                excel_go)
+
+
+
+compare_dpc23_gcs(all_soma_file,
+                  soma_filter_gc_genes_file,
+                  gc_vs_gcf_comparison_file,
+                  gcf_comparison_file,
+                  file.path(file_path_ref$project_directory,
+                            file_path_ref$sequencing$results$dpc23_gcs_comparison),
+                  excel_dge,
+                  excel_go)
+
+
+
+compare_dpc23_cpn_dpc21_cth(
+  all_soma_file,
+  soma_filter_gc_genes_file,
+  gc_vs_gcf_comparison_file,
+  gcf_comparison_file,
+  file.path(file_path_ref$project_directory,
+            file_path_ref$sequencing$results$dpc3_cpn_dpc21_cth_comparison),
+  excel_dge,
+  excel_go)
+
+  
+compare_cth_gcs(
+  all_soma_file,
+  soma_filter_gc_genes_file,
+  gc_vs_gcf_comparison_file,
+  gcf_comparison_file,
+  file.path(file_path_ref$project_directory,
+            file_path_ref$sequencing$results$cth_gc_comparison),
+  excel_dge,
+  excel_go)
+
+
+compare_cpn_gcs(
+  all_soma_file,
+  soma_filter_gc_genes_file,
+  gc_vs_gcf_comparison_file,
+  gcf_comparison_file,
+  file.path(file_path_ref$project_directory,
+            file_path_ref$sequencing$results$cpn_gc_comparison),
+  excel_dge,
+  excel_go)
+
+

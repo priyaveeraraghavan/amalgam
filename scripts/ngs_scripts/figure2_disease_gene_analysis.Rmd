@@ -1,0 +1,277 @@
+---
+title: "figure2_disease_gene_analysis"
+author: "Priya Veeraraghavan"
+date: "2023-04-05"
+output: html_document
+---
+
+# Comparative analysis Disease risk genes Whole Exome Sequencing
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warnings=FALSE)
+```
+
+
+Enrichment analysis for disease-associated genes in GC/soma data
+Sources:
+ASD Whole Exome Seuquencing: Satterstrom, et al. Cell 2021. https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7250485/
+SFARI risk genes (sfari.org)
+SCHEMA Whole Exome Rare Coding Variants: Singh, et al. Nature 2022. https://www.nature.com/articles/s41586-022-04556-w#MOESM1
+SCHEMA WES+FineMap Prority: Trubetskoy, et al. Nature 2022. https://www.nature.com/articles/s41586-022-04434-5
+BipEx: Palmer, et al. Nature Genetics 2022. https://www.nature.com/articles/s41588-022-01034-x
+
+
+## Approach
+1. Segment into "expression groups": GC-localized or soma-restricted in either subtype at DPC23
+2. Extract "significant" disease risk genes from the whole exome studies
+3. Look for enrichment or depletion of risk genes in each geneset using fisher's exact test. 
+```{r}
+library(biomaRt)
+library(rjson)
+library(readxl)
+
+input <- "C:/Users/prv892/Documents/GitHub/amalgam/metadata.json"
+
+file_path_ref <- fromJSON(file = input)
+
+# import the relevant parameters and references
+source(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$setup_script))
+
+robj_savefile <- file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$intersect_disease_genes)
+```
+
+These are human external databases so get mapping from human to mouse
+```{r}
+# create ensembl biomart instance 
+grcm38_101 <- biomaRt::useEnsembl(biomart="ensembl", version=101, 
+                                  dataset="mmusculus_gene_ensembl")
+
+# get human-mouse homologous genes
+mouse2human <- getBM(c("hsapiens_homolog_ensembl_gene", "ensembl_gene_id", "external_gene_name"),
+                       filters="ensembl_gene_id",
+                       values=unique(t2g_protein$ensembl_gene_id),
+                       mart=grcm38_101) %>%
+  subset(nchar(hsapiens_homolog_ensembl_gene) > 0)
+
+```
+
+Format the ASD whole exome sequencing dataset.
+```{r}
+satterstrom_asd_file <- file.path(file_path_ref$project_directory, 
+                                  file_path_ref$external_data$satterstrom_asd)
+
+# grab risk genes
+satterstrom_risk_hs <- read_excel(satterstrom_asd_file, sheet="102_ASD")$ensembl_gene_id
+
+# grab background
+satterstrom_bkg_autosomal_hs <- read_excel(satterstrom_asd_file,
+                                        sheet="Autosomal")$ensembl_gene_id
+
+satterstrom_bkg_x_hs <- read_excel(satterstrom_asd_file, 
+                                sheet="ChrX")$ensembl_gene_id 
+
+satterstrom_bkg_hs <- unique(satterstrom_bkg_autosomal_hs, 
+                          satterstrom_bkg_x_hs)
+
+# get the mouse ensembl gene id
+satterstrom_risk <- unique(subset(mouse2human, hsapiens_homolog_ensembl_gene %in% satterstrom_risk_hs)$ensembl_gene_id)
+
+satterstrom_bkg <-  unique(subset(mouse2human, hsapiens_homolog_ensembl_gene %in% satterstrom_bkg_hs)$ensembl_gene_id)
+
+print(sprintf("Number of human genes risk: %s", length(satterstrom_risk_hs)))
+print(sprintf("Number of homologous mouse genes risk: %s", length(satterstrom_risk)))
+
+print(sprintf("Number of human genes background: %s", length(satterstrom_bkg_hs)))
+print(sprintf("Number of homologous mouse genes background: %s", length(satterstrom_bkg)))
+
+```
+
+Format SFARI Risk genes
+```{r}
+sfari_hs <- read.csv(file.path(file_path_ref$project_directory,
+                  file_path_ref$external_data$sfari), 
+                  stringsAsFactors = FALSE)$ensembl.id
+
+sfari_risk <- unique(subset(mouse2human, 
+                            hsapiens_homolog_ensembl_gene %in% sfari_hs
+                            )$ensembl_gene_id)
+
+sfari_bkg <- unique(t2g_protein$ensembl_gene_id)
+     
+print(sprintf("Number of human genes risk: %s", length(sfari_hs)))
+print(sprintf("Number of homologous mouse genes risk: %s", length(sfari_risk)))
+                
+```
+
+Format SCHEMA rare truncating variants
+```{r}
+schema_res <- read.csv(file.path(file_path_ref$project_directory,
+                             file_path_ref$external_data$schema_ptv),
+                   stringsAsFactors = FALSE)
+
+schema_sig_hs <- subset(schema_res, P.meta < 8.23e-5)$Gene
+
+schema_risk <- unique(subset(mouse2human,
+                             hsapiens_homolog_ensembl_gene %in% schema_sig_hs
+                             )$ensembl_gene_id)
+
+schema_bkg_hs <- schema_res$Gene
+
+schema_bkg <- unique(subset(mouse2human,
+                             hsapiens_homolog_ensembl_gene %in% schema_bkg_hs
+                             )$ensembl_gene_id)
+  
+print(sprintf("Number of human genes risk: %s", length(schema_sig_hs)))
+print(sprintf("Number of homologous mouse genes risk: %s", length(schema_risk)))
+
+
+print(sprintf("Number of human genes background: %s", length(schema_bkg_hs)))
+print(sprintf("Number of homologous mouse genes background: %s", length(schema_bkg)))
+   
+
+```
+Format SCHEMA schizophrenia fine-mapping prioritized variants
+```{r}
+schema_prio_res <- read.csv(file.path(file_path_ref$project_directory,
+                                  file_path_ref$external_data$schema_finemap),
+                        stringsAsFactors=FALSE)
+
+schema_prio_risk <- unique(subset(mouse2human,
+                                  external_gene_name %in% schema_prio_res$external_gene_name
+                                  )$ensembl_gene_id)
+
+
+print(sprintf("Number of homologous mouse genes risk: %s", length(schema_prio_risk)))
+print(sprintf("Number of homologous mouse genes background: %s", length(schema_bkg)))
+
+```
+
+Biopolar exome
+```{r}
+# Biploar exome
+bipex_ptv_res <- read.csv(file.path(file_path_ref$project_dir,
+                            file_path_ref$external_data$bipex),
+                  stringsAsFactors=FALSE)
+
+
+# get PTV with fisher p value < 0.05 --> note that NONE of these reach exome-wide significance of 2.38x10-6
+bipex_ptv_sig <- bipex_ptv_res %>% 
+  subset(PTV.Case.Count+PTV.Control.Count >= 10 & PTV.Fisher.odds.ratio > 1 & PTV.Fisher.p.val < 0.05)
+
+bipex_ptv_sig_hs <- bipex_ptv_sig$Gene
+bipex_ptv_risk <- unique(subset(mouse2human, 
+                                hsapiens_homolog_ensembl_gene %in% bipex_ptv_sig_hs
+                                )$ensembl_gene_id)
+
+bipex_ptv_bkg_hs <- bipex_ptv_res$Gene
+bipex_ptv_bkg <- unique(subset(mouse2human,
+                               hsapiens_homolog_ensembl_gene %in% bipex_ptv_bkg_hs
+                               )$ensembl_gene_id)
+
+print(sprintf("Number of human genes risk: %s", length(bipex_ptv_sig_hs)))
+print(sprintf("Number of homologous mouse genes risk: %s", length(bipex_ptv_risk)))
+
+print(sprintf("Number of human genes background: %s", length(bipex_ptv_bkg_hs)))
+print(sprintf("Number of homologous mouse genes background: %s", length(bipex_ptv_bkg)))
+
+```
+
+Load gene sets
+```{r}
+load(file.path(file_path_ref$project_directory, 
+               file_path_ref$sequencing$results$all_soma_comparison))
+
+load(file.path(file_path_ref$project_directory, 
+            file_path_ref$sequencing$results$gc_vs_gcf_comparison))
+```
+
+```{r}
+# function to perform fishers exact test
+run_fishers <- function(disease_genes, expressed_genes, universe) {
+
+  disease_expressed <- intersect(disease_genes, expressed_genes)
+  disease_nonexpressed <- setdiff(disease_genes, expressed_genes)
+  nondisease_expressed <- setdiff(expressed_genes, disease_genes)
+  nondisease_nonexpressed <- setdiff(setdiff(universe, expressed_genes), disease_genes)
+  
+  fisher_mat <- matrix(c(length(disease_expressed), length(disease_nonexpressed), length(nondisease_expressed), length(nondisease_nonexpressed)),
+                       nrow=2,
+                       dimnames=list(c("Expressed", "Not_Expressed"), c("Disease_Associated", "Non_Disease_Associated")))
+  res <- fisher.test(fisher_mat)
+  
+  return(list(odds_ratio=res$estimate, pvalue=res$p.value, CI_low=res$conf.int[1], CI_high=res$conf.int[2]))
+}
+
+disease_gene_groups <- list(ASD_WES=satterstrom_risk, SFARI=sfari_risk, 
+                            SCHEMA_WES=schema_risk, SCHEMA_FineMap=schema_prio_risk, 
+                            BipEx=bipex_ptv_risk)
+
+background_gene_groups <- list(ASD_WES=satterstrom_bkg, SFARI=sfari_bkg, 
+                               SCHEMA_WES=schema_bkg, SCHEMA_FineMap=schema_bkg, 
+                               BipEx=bipex_ptv_bkg)
+
+expressed_gene_groups <- list(CPN_GC=gc_enrich_genes$CPN_GC_DPC23, 
+                              CThPN_GC=gc_enrich_genes$CThPN_GC_DPC23,
+                              CPN_Soma=setdiff(cpn_soma_valid_genes, gc_enrich_genes$CPN_GC_DPC23),
+                              CThPN_Soma=setdiff(cth_soma_valid_genes, gc_enrich_genes$CThPN_GC_DPC23))
+
+all_combos <- expand.grid(names(disease_gene_groups), 
+                          names(expressed_gene_groups)) %>%
+  dplyr::rename(disease_group=Var1, 
+                express_group=Var2) %>%
+  rowwise() %>%
+  mutate(disease_genes=list(disease_gene_groups[[disease_group]]),
+         expressed_genes=list(expressed_gene_groups[[express_group]]),
+         bkg_genes=list(background_gene_groups[[disease_group]]))
+
+# perform fishers exact test
+fishers_res <- all_combos %>%
+  rowwise() %>%
+  mutate(fisher_obj=list(run_fishers(disease_genes, expressed_genes, bkg_genes))) %>%
+  rowwise() %>%
+  mutate(odds_ratio=fisher_obj$odds_ratio,
+         pvalue=fisher_obj$pvalue,
+         CI_low=fisher_obj$CI_low,
+         CI_high=fisher_obj$CI_high,
+         subtype=strsplit(as.character(express_group), "_")[[1]][1],
+         location=strsplit(as.character(express_group), "_")[[1]][2]) 
+
+
+  
+
+# order the result
+fishers_res$disease_group <- factor(fishers_res$disease_group, 
+                                      levels=c("BipEx", "SCHEMA_FineMap", "SCHEMA_WES", "SFARI", "ASD_WES"))
+
+save(fishers_res, file=robj_savefile)
+
+# get gene groups for csv file
+disease_gene_df <- all_combos %>%
+  rowwise() %>%
+  mutate(disease_genes_expressed=list(intersect(disease_genes, expressed_genes))) %>%
+  dplyr::select(disease_group, express_group, disease_genes_expressed) %>%
+  unnest(disease_genes_expressed) %>%
+  inner_join(ens2ext, by=c("disease_genes_expressed" = "ensembl_gene_id"))
+
+csv_savefile <- gsub(".RData", ".csv", robj_savefile)
+write.csv(disease_gene_df, file=csv_savefile)
+  
+```
+
+Plot the result
+```{r}
+plt <- ggplot(fishers_res, aes(odds_ratio, disease_group, xmin=CI_low, xmax=CI_high, color=express_group)) + 
+    geom_point(position=position_dodge(0.5), size=1) +
+    geom_errorbar(position=position_dodge(0.5), width=0.2, size=0.5) +
+    scale_x_log10(limits=c(NA, 30)) + 
+    scale_color_manual(values=c(colorRampPalette(c("white", cpn_color, "black"))(10)[c(3,7)],
+                                colorRampPalette(c("white", cthpn_color, "black"))(10)[c(3, 7)])) +
+    theme_classic() +
+    geom_vline(xintercept=1, linetype='dashed', color=background_color_dark) +
+    ylab("") +
+    xlab("Odds Ratio") +
+  theme(legend.position="none")
+
+plt
+```
