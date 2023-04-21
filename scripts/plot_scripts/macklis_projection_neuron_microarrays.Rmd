@@ -1,0 +1,189 @@
+---
+title: "Plot Genes from GSE17783 and GSE61711"
+author: "Priya Veeraraghavan"
+date: "2023-04-18"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Script to plot affymetrix data for subtypes of cortical projection neurons 
+```{r}
+# imports
+library(biomaRt)
+library(dplyr)
+library(GEOquery)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(tidyr)
+
+library(rjson)
+input <- "C:/Users/prv892/Documents/GitHub/amalgam/metadata.json"
+
+file_path_ref <- fromJSON(file = input)
+
+
+# import the relevant parameters and references
+source(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$setup_script))
+
+source(file.path(file_path_ref$project_directory,
+                 file_path_ref$plots$setup_script))
+
+
+##################################
+### FUNCTIONS : DO NOT MODIFY ####
+###   PROCEED TO MAIN BELOW   ####
+##################################
+
+load_gset <- function(geo_id) {
+  gset <- getGEO(geo_id, AnnotGPL = TRUE, GSEMatrix = TRUE)
+  if (length(gset) > 1) idx <- grep("GPL1261", attr(gset, "names")) else idx <- 1
+  gset <- gset[[idx]]
+
+  # make proper column names to match toptable 
+  fvarLabels(gset) <- make.names(fvarLabels(gset))
+
+  # log2 transform
+  ex <- exprs(gset)
+  qx <- as.numeric(quantile(ex, c(0., 0.25, 0.5, 0.75, 0.99, 1.0), na.rm=T))
+  LogC <- (qx[5] > 100) ||
+    (qx[6]-qx[1] > 50 && qx[2] > 0) ||
+    (qx[2] > 0 && qx[2] < 1 && qx[4] > 1 && qx[4] < 2)
+  if (LogC) { ex[which(ex <= 0)] <- NaN
+  exprs(gset) <- log2(ex) }
+  
+  ex <- data.frame(ex)
+  ex$affy_mouse430_2 <- rownames(ex)
+  
+  return(ex)
+}
+
+# load the microarray data
+load_microarray_data <- function(main_folder) {
+  expression_matrix_file <- file.path(main_folder, "expression_matrix.Rdata")
+  if (file.exists(expression_matrix_file)) {
+    load(expression_matrix_file)
+  } else {
+    
+    ex <- merge(load_gset("GSE17783"), load_gset("GSE61711"), by="affy_mouse430_2", all=TRUE)
+    #ex[is.na(ex)] <- 0
+    
+    save(ex, file=expression_matrix_file)
+  }
+  return(ex)
+}
+
+load_affy_mappings <- function(main_folder) {
+  gene_affy_mappings_file <- file.path(main_folder, "affy_430_2_to_gene.RData")
+  if (file.exists(gene_affy_mappings_file)) {
+    load(gene_affy_mappings_file)
+  } else {
+    # create an instance of a biomart with the mouse ensembl annotation
+    mart <- biomaRt::useMart(biomart = "ENSEMBL_MART_ENSEMBL",
+                             dataset = 'mmusculus_gene_ensembl',
+                             host = 'ensembl.org')
+    
+    gene2affy <- biomaRt::getBM(attributes = c("external_gene_name", "affy_mouse430_2"),
+                                mart = mart)
+    
+    save(gene2affy, file=gene_affy_mappings_file)
+  }
+  return(gene2affy)
+}
+
+# function to format the affy to gene name mapping, the metadata, and the array intensities
+format_affy_metadata <- function(ex, gene2affy, metadata) {
+  ex_long <- ex %>% pivot_longer(starts_with("GSM"), names_to="GEO", values_to="log2_array_intensity")
+  all_long <- merge(merge(ex_long, gene2affy, by="affy_mouse430_2"), metadata, by="GEO")
+  return(all_long)
+}
+
+# function to plot the array intensities per gene
+plot_gene <- function(gene, all_data_long, nrow=1) {
+  gene_subset <- subset(all_data_long, external_gene_name == gene) %>% subset(Cell.Type %in% c("Callosal", "CThPN"))
+  unique_genes <- unique(gene_subset$affy_mouse430_2)
+  
+  gene_subset_means <- gene_subset %>% 
+    group_by(affy_mouse430_2, Cell.Type, DPC) %>% 
+    summarize(mean_log2_array_intensity=mean(log2_array_intensity),
+              std_log2_array_intensity=sd(log2_array_intensity))
+  
+  return(ggplot(gene_subset_means, 
+                aes(DPC, mean_log2_array_intensity, color=Cell.Type)) + 
+                geom_line(linewidth=0.5) + 
+                geom_errorbar(aes(ymin=mean_log2_array_intensity-std_log2_array_intensity, 
+                                  ymax=mean_log2_array_intensity+std_log2_array_intensity),
+                              linewidth=0.5,
+                              width=0.1) +
+                ggtitle(sprintf("Array Intensities for %s", gene)) +
+                theme_classic() + 
+           facet_wrap(~affy_mouse430_2, nrow=1))
+}
+
+plot_gene_scatter <- function(gene, all_data_long) {
+  gene_subset <- subset(all_data_long, external_gene_name == gene) %>% subset(Cell.Type %in% c("Callosal", "CThPN"))
+  gene_subset$DPC <- sapply(gene_subset$DPC, as.numeric)
+  unique_genes <- unique(gene_subset$affy_mouse430_2)
+  
+  mean_expression <- gene_subset %>% group_by(Cell.Type, DPC, affy_mouse430_2) %>% summarize(mean_intensity=mean(log2_array_intensity))
+  
+  return(ggplot(gene_subset, aes(DPC, log2_array_intensity, color=Cell.Type)) + 
+           geom_point(size=4) + 
+           geom_line(data=mean_expression, aes(x=DPC, y=mean_intensity, color=Cell.Type), lwd=1.5, alpha=0.5) + 
+           facet_grid(cols=vars(Cell.Type)) + 
+           theme_classic())
+}
+
+setup <- function(main_folder) {
+  # load the metadata associated with the microarrays
+  metadata <- read.csv(file.path(main_folder, "affy_metadata.csv"))
+  
+  # load the microarry expression data
+  ex <- load_microarray_data(main_folder)
+  
+  # load the name mappings from gene to affy probe id
+  gene2affy <- load_affy_mappings(main_folder)
+  
+  # retrieve long format
+  expression_long <- format_affy_metadata(ex, gene2affy, metadata)
+  
+  return(expression_long)
+    
+}
+```
+
+# Setup folder
+```{r}
+main_folder <- file.path(file_path_ref$project_directory, 
+                         file_path_ref$external_data$cxpn_temporal_microarray)
+dir.create(main_folder)
+
+plots_folder <- file.path(main_folder, "plots") # create a folder to save plots. Can be whatever you want
+dir.create(file.path(main_folder, "plots"))
+
+expression_data <- setup(main_folder)
+```
+
+# plot the genes
+```{r}
+plot_supplement_9_rbps <- function(plot_savefile_prefix) {
+  
+  for (gene in c("Rbms1", "Pcbp3", "Celf4", "Cpeb4", "Tia1", "Raly")) {
+    plt <- plot_gene(gene, expression_data) +
+      scale_color_manual(values=c(cpn_color, cthpn_color))
+    
+    ggsave(sprintf("%s_%s.pdf", plot_savefile_prefix, gene),
+           plot=plt,
+           height=50, width=100, units="mm",
+           device="pdf")
+  }
+}
+
+plot_supplement_9_rbps(file.path(file_path_ref$project_directory,
+                                 file_path_ref$plots$plot_directory,
+                                 "cxpn_temporal_microarrays"))
+```

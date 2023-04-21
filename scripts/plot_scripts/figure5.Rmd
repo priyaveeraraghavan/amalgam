@@ -1,0 +1,725 @@
+---
+title: "figure5"
+author: "Priya Veeraraghavan"
+date: "2023-04-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load all the profiled genes 
+```{r}
+library(rjson)
+library(transite)
+input <- "C:/Users/prv892/Documents/GitHub/amalgam/metadata.json"
+
+file_path_ref <- fromJSON(file = input)
+
+
+# import the relevant parameters and references
+source(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$setup_script))
+
+source(file.path(file_path_ref$project_directory,
+                 file_path_ref$plots$setup_script))
+```
+
+```{r}
+plot_main_5b <- function(plot_savefile) {
+  
+  load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$figure5_dtu_results))
+  
+load(file.path(file_path_ref$project_directory, 
+                file_path_ref$external_data$last250_coordinates)) 
+
+load(file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$all_dge_results))
+
+cpn_gc_dtu <- dge_results$transcript_level$cpn_gc_dpc21_vs_cpn_gc_dpc23
+cpn_soma_dtu <- dge_results$transcript_level$cpn_soma_dpc21_vs_cpn_soma_dpc23
+
+txpt_lengths <- unique(coords_last250_collapsed_df[,c("Geneid_first", "utr_length_longest")])
+
+  both_dtu <- cpn_soma_dtu %>% 
+    inner_join(cpn_gc_dtu, by=c("Geneid_first",
+                                "ensembl_gene_id",
+                                "external_gene_name"),
+               suffix=c(".soma", ".gc"))  
+
+  plt <- rasterize(ggplot(both_dtu, aes(log2FoldChange.soma,
+                       log2FoldChange.gc)) + 
+    geom_point(color=background_color, size=0.5), dpi=300) +
+    rasterize(geom_point(data=subset(both_dtu, is_sig.gc), 
+               mapping=aes(log2FoldChange.soma,
+                       log2FoldChange.gc),
+               color=cpn_color, size=0.5), dpi=300) +
+     geom_text_repel(data=subset(both_dtu, is_sig.gc & (log2FoldChange.gc > 1 | log2FoldChange.gc < -1.5)), 
+               mapping=aes(log2FoldChange.soma,
+                       log2FoldChange.gc,
+                       label=external_gene_name),
+               color=cpn_color, 
+               size=3) +
+    geom_hline(yintercept=0, linewidth=0.5, linetype="dashed", color=background_color_dark) +
+    geom_vline(xintercept=0, linewidth=0.5, linetype="dashed", color=background_color_dark) +
+    theme_classic() +
+    xlab("Log2 DEU CPN Soma DPC23/DPC21") +
+    ylab("Log2 DEU CPN GC DPC23/DPC21")
+    
+  
+  plot(plt)
+  
+  # possibly box plots of 
+  # Mylip
+  # Atp2b1
+
+  ggsave(plot_savefile, plot=plt,  device="pdf", width=100, height=100, units="mm", useDingbats=FALSE)
+}
+
+plot_main_5b(file.path(file_path_ref$project_directory,
+                       file_path_ref$plots$plot_directory,
+                       "main_5b_option1_DEU.pdf"))
+```
+
+```{r}
+plot_main_5b_option2 <- function(plot_savefile) {
+  
+  load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$all_dge_results))
+  
+  soma_dge <- dge_results$gene_level$cpn_soma_dpc21_vs_cpn_soma_dpc23
+  gc_dge <- dge_results$gene_level$cpn_gc_dpc21_vs_cpn_gc_dpc23
+  valid_gc_genes <- subset(dge_results$gene_level$gc_vs_gcf, 
+                           CPN_GC_DPC23 | CPN_GC_DPC21 )$ensembl_gene_id
+  
+  both_dge <- soma_dge %>%
+    inner_join(gc_dge, by="ensembl_gene_id", suffix=c(".soma", ".gc")) %>%
+    subset(ensembl_gene_id %in% valid_gc_genes)
+  
+  # augment with cpn gc lfc sig 
+  both_dge <- both_dge %>%
+    rowwise() %>%
+    mutate(color_group=padj.gc < 0.05,
+           label_group=padj.gc < 0.05 & abs(log2FoldChange.gc) > 1)
+                 
+
+  plt <- rasterize(ggplot(both_dge, aes(log2FoldChange.soma,
+                       log2FoldChange.gc)) + 
+    geom_point(color=background_color, size=0.5), dpi=300) +
+    rasterize(geom_point(data=subset(both_dge, color_group), 
+               mapping=aes(log2FoldChange.soma,
+                       log2FoldChange.gc),
+               color=cpn_color, size=0.5), dpi=300) +
+     geom_text_repel(data=subset(both_dge, label_group), 
+               mapping=aes(log2FoldChange.soma,
+                       log2FoldChange.gc,
+                       label=external_gene_name),
+               color=cpn_color, 
+               size=3) +
+    geom_hline(yintercept=0, linewidth=0.5, linetype="dashed", color=background_color_dark) +
+    geom_vline(xintercept=0, linewidth=0.5, linetype="dashed", color=background_color_dark) +
+    theme_classic() +
+    xlab("Log2 DGE CPN Soma DPC23/DPC21") +
+    ylab("Log2 DGE CPN Soma DPC23/DPC21")
+    
+  
+  plot(plt)
+  
+  # possibly box plots of 
+  # Mylip
+  # Atp2b1
+
+  ggsave(plot_savefile, plot=plt,  device="pdf", width=100, height=100, units="mm", useDingbats=FALSE)
+}
+
+plot_main_5b_option2(file.path(file_path_ref$project_directory,
+                       file_path_ref$plots$plot_directory,
+                       "main_5b_option2_DGE.pdf"))
+```
+
+Adgrl3 : mRNA encoding Lphn3 ... post-synapse??
+
+```{r}
+plot_main_5c <- function(plot_saveprefix) {
+  
+  load(file.path(file_path_ref$project_directory,
+                   file_path_ref$sequencing$results$all_dge_results))
+  
+  txpt_counts <- dge_results$transcript_level$CPM %>% 
+    inner_join(t2g_protein, by="ensembl_transcript_id")
+  gene_counts <- dge_results$gene_level$CPM %>% 
+    inner_join(unique(t2g_protein[,c("ensembl_gene_id", "external_gene_name")]), by="ensembl_gene_id")
+  
+  genes_to_plot <- c("Adgrl3", "Flrt3", "Ankrd50", "Dcx", "C2cd5", "Kirrel3")
+  
+  plot_boxplot_aes <- function(cpm_subset) {
+     plt <- ggplot(cpm_subset, aes(sample_type, CPM, fill=location, color=location)) + 
+      geom_boxplot(color=background_color_dark, linewidth=0.2, outlier.size = 0.2) + 
+      geom_point(color=background_color_dark, size=0.2) +
+      geom_line(aes(group=replicate), 
+                linewidth=0.2, color=background_color_dark) +
+      scale_y_log10() +
+      scale_fill_manual(values=c(cpn_color_light, cpn_color_dark)) +
+      theme_classic()+
+      theme(text=element_text(size=7), legend.position = "None") +
+       xlab("")
+     
+     return(plt)
+  }
+  
+  plot_boxplots_txpt <- function(geneid) {
+    
+    cpm_subset <- subset(txpt_counts, subtype == "CPN" & external_gene_name == geneid)
+     
+    
+     valid_txpts <- (cpm_subset %>% 
+       group_by(ensembl_transcript_id) %>%
+       summarize(median_cpm=median(CPM)) %>%
+       subset(median_cpm > 10))$ensembl_transcript_id
+     
+     cpm_subset <- subset(cpm_subset, ensembl_transcript_id %in% valid_txpts)
+     
+     cpm_subset$sample_type <- factor(cpm_subset$sample_type, 
+                                     levels=c("CPN_Soma_DPC21", "CPN_GC_DPC21", "CPN_Soma_DPC23", "CPN_GC_DPC23"))
+     
+     plt <- plot_boxplot_aes(cpm_subset) +
+      facet_wrap(vars(ensembl_transcript_id), nrow=1) 
+    
+    
+    plot(plt)
+    
+    return(list(ntxpt=length(unique(valid_txpts)), plt=plt))
+  }
+  
+  plot_boxplots_gene <- function(geneid) {
+    
+    cpm_subset <- subset(gene_counts,  subtype == "CPN" & external_gene_name == geneid) 
+    cpm_subset$sample_type <- factor(cpm_subset$sample_type, 
+                                     levels=c("CPN_Soma_DPC21", "CPN_GC_DPC21", "CPN_Soma_DPC23", "CPN_GC_DPC23"))
+    
+    plt <- plot_boxplot_aes(cpm_subset)
+    
+    plot(plt)
+    
+    return(plt)
+  }
+  
+  for (g in   genes_to_plot) {
+    
+    ggsave(sprintf("%s_%s_genelevel.pdf", plot_saveprefix, g), 
+           plot=plot_boxplots_gene(g), height=60, width=55, units="mm", device="pdf")
+    
+   txpt_plot <- plot_boxplots_txpt(g)
+    
+    ggsave(sprintf("%s_%s_txptlevel.pdf", plot_saveprefix, g), 
+           plot=txpt_plot$plt, height=60, width=40*txpt_plot$ntxpt+15, units="mm", device="pdf")
+  }
+  
+  
+}
+
+plot_main_5c(file.path(file_path_ref$project_directory,
+                       file_path_ref$plots$plot_directory,
+                       "main_5c"))
+```
+
+```{r}
+plot_main_5d <- function(plot_savefile) {
+  
+  load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$figure5_dtu_results))
+
+  plt <- ridgeplot(simplify(cpn_gc_gsea)) + 
+    scale_fill_gradient(low=accent_color_go_dark, high=accent_color_go_light) +
+    xlab("P1 <- CPN GC -> P3")
+  
+  ggsave(plot_savefile, plot=plt, device="pdf", width=200, height=160, units="mm")
+  
+   plt <- ridgeplot(simplify(cpn_soma_gsea)) + 
+    scale_fill_gradient(low=accent_color_go_dark, high=accent_color_go_light) +
+    xlab("P1 <- CPN Soma -> P3")
+  
+  ggsave(gsub("gc", "soma", plot_savefile), plot=plt, device="pdf", width=200, height=160, units="mm")
+
+}
+
+plot_main_5d(file.path(file_path_ref$project_directory,
+                       file_path_ref$plots$plot_directory,
+                       "main_5d_gsea_cpn_gc_isoforms.pdf"))
+
+
+```
+```{r}
+plot_main_5f <- function(plot_savefile) {
+load(file.path("C:/Users/prv892/Documents/GitHub/amalgam/data/sequencing/differential_expression/cpn_stage_utr_comparison.TSMA_results.RData"))
+
+rbp_names_enrich_gc_cpn <- subset(cpn_utr_enrichment, adj_p_value < 0.05 & enrichment > 1) %>% separate_rows(motif_rbps, sep=", ") %>% rowwise() %>% 
+  mutate(rbp=gsub(" ", "", str_to_title(motif_rbps))) %>% 
+  dplyr::select(rbp)%>% unique() %>%
+  rowwise() %>%
+  mutate(rbp=gsub("Brunol", "Celf", gsub("Qki", "Qk", rbp)))
+
+# load cpn soma data
+load(file.path("C:/Users/prv892/Documents/GitHub/amalgam/data/sequencing/differential_expression/cpn_soma_comparison.RData"))
+
+# get proteins annotated as rbps
+  rbps <- AnnotationDbi::select(org.Mm.eg.db,  keytype="GOALL", keys="GO:0003723", columns = "ENSEMBL") %>%
+    dplyr::select(ENSEMBL) %>%
+    unique() 
+  
+dge_res_gc_rbp_annot <- dge_res %>% 
+  subset(baseMean > 100) %>%
+  rowwise() %>% 
+  mutate(rbp_motif_enriched_gc=external_gene_name %in% rbp_names_enrich_gc_cpn$rbp,
+         is_rbp=ensembl_gene_id %in% rbps$ENSEMBL,
+         to_label=external_gene_name %in% c("Rbms1", "Pcbp3", "Celf4", "Cpeb4", "Tia1", "Mex3d", "Mex3c", "Elavl1")) %>%
+  arrange(rbp_motif_enriched_gc)
+
+plt <- rasterize(ggplot(dge_res_gc_rbp_annot %>% subset(is_rbp),
+       aes(log2FoldChange, -log10(padj), color=rbp_motif_enriched_gc)) + 
+  geom_point(size=0.5), dpi=300) +
+  geom_text_repel(data=subset(dge_res_gc_rbp_annot, to_label),
+                  mapping=aes(log2FoldChange, -log10(padj), label=external_gene_name)) +
+  theme_classic() +
+  scale_color_manual(values=c(background_color, cpn_color)) +
+  theme(legend.position="None") +
+  xlab("Log2 Fold Change CPN Soma DPC23/DPC21") +
+  geom_hline(yintercept=-log10(0.05), linetype="dashed", linewidth=0.5, color=background_color_dark) +
+  geom_vline(xintercept=-1, linetype="dashed", linewidth=0.5, color=background_color_dark) +
+  geom_vline(xintercept=1, linetype="dashed", linewidth=0.5, color=background_color_dark) +
+  theme(text=element_text(size=7))
+
+ggsave(plot_savefile, plot=plt, device="pdf", width=80, height=80, units="mm", useDingbats=FALSE)
+}
+plot_main_5f(file.path(file_path_ref$project_directory, file_path_ref$plots$plot_directory, "main_5f.pdf"))
+```
+
+
+
+```{r}
+get_rbms1_utr_binding_sites <- function() {
+   # load results 
+load(file.path(file_path_ref$project_directory, "data/sequencing/differential_expression/gc_vs_soma.TSMA_results.RData"))
+
+  
+  motifs <- c("M143_0.6")
+
+  idx_motifs <- which(cpn_utr_enrichment$motif_id %in% motifs)
+  
+  # get p1
+  p1_sites <- data.frame(do.call(rbind, lapply(idx_motifs,
+                                               function(i) data.frame(motif=cpn_gc_p1_utr_scores$df$motif_id[i], 
+                                                                      gene_group="P1_CPN_GC",
+                                                                      motif_instances=cpn_gc_p1_utr_scores$absolute_hits[[i]],
+                                                                      ensembl_transcript_id=names(cpn_gc_p1_utr_scores$total_sites[[i]])))))
+  
+    # get p3
+  p3_sites <- data.frame(do.call(rbind, lapply(idx_motifs,
+                                               function(i) data.frame(motif=cpn_gc_utr_scores$df$motif_id[i], 
+                                                                      gene_group="P3_CPN_GC",
+                                                                      motif_instances=cpn_gc_utr_scores$absolute_hits[[i]],
+                                                                      ensembl_transcript_id=names(cpn_gc_utr_scores$total_sites[[i]])))))
+  
+  
+  all_sites <- rbind(p1_sites, p3_sites) %>%
+    group_by(motif, motif_instances, ensembl_transcript_id) %>%
+    summarize(gene_group=ifelse(length(gene_group) == 2, "Shared_CPN_GC", gene_group),
+              num_sites_called=motif_instances[1])
+  
+
+  all_sites$gene_group <- factor(all_sites$gene_group, levels=c("P1_CPN_GC", "Shared_CPN_GC", "P3_CPN_GC"))
+    
+  return(all_sites)
+}
+
+
+plot_main_rbms1_motif <- function(plot_savefile) {
+ 
+  all_sites <- get_rbms1_utr_binding_sites()
+  all_sites_prop <- all_sites %>%
+    group_by(gene_group) %>%
+    summarize(num_txpt_total=n()) %>%
+    inner_join(all_sites, by="gene_group") %>%
+    group_by(gene_group, num_sites_called) %>%
+    summarize(proportion_num_sites_called=n()/num_txpt_total[1]) %>%
+    rowwise() %>%
+    mutate(Rbms1_motifs=factor(num_sites_called))
+  
+  
+  plt <- ggplot(all_sites_prop %>% subset(num_sites_called > 0), aes(gene_group, proportion_num_sites_called, fill=Rbms1_motifs)) + 
+    geom_bar(stat="identity") +
+    scale_fill_manual(values=c(colorRampPalette(c("white", cpn_color, "black"))(7)[2:6])) +
+        theme_classic() +
+         xlab("") +
+          ylab("Proportion of Transcripts with Rbms1 Motif") 
+  
+  plot(plt)
+  ggsave(plot_savefile, plot=plt, device="pdf", width=100, height=160, units="mm", useDingbats=FALSE)
+  
+
+
+}
+
+plot_main_rbms1_motif(file.path(file_path_ref$project_directory, file_path_ref$plots$plot_directory, "main_5_rbms1_motif_gc.pdf"))
+```
+
+
+
+# Supplement
+```{r}
+plot_supplement_12_cpn_soma_gsea <- function(plot_savefile) {
+  
+  # load all data
+  load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$all_dge_results))
+  
+  # cpn soma data
+  cpn_soma_dge <- dge_results$gene_level$cpn_soma_dpc21_vs_cpn_soma_dpc23 %>%
+    arrange(desc(log2FoldChange))
+  
+  cpn_soma_dge_lst <- cpn_soma_dge$log2FoldChange
+  names(cpn_soma_dge_lst) <- cpn_soma_dge$ensembl_gene_id
+  
+  cpn_soma_dge_gsea <- setReadable(gseGO(cpn_soma_dge_lst, ont="ALL", 
+                                         OrgDb = org.Mm.eg.db, keyType = "ENSEMBL"), 
+                                   OrgDb = org.Mm.eg.db, keyType="ENSEMBL")
+  
+  plt <- ridgeplot(cpn_soma_dge_gsea) + 
+    scale_fill_gradient(low=accent_color_go_dark, high=accent_color_go_light)
+
+  
+  ggsave(plot_savefile, plot=plt, height=240, width=160, units="mm", device="pdf")
+}
+
+plot_supplement_cpn_soma_gsea(file.path(file_path_ref$project_directory,
+                                        file_path_ref$plots$plot_directory,
+                                        "supplement_12_cpn_soma_gsea.pdf"))
+```
+
+```{r}
+plot_supplement_rbms1_gc_go <- function(plot_savefile) {
+  
+  all_sites <- get_rbms1_utr_binding_sites()
+  
+  utr_genes_cpn <- all_sites %>% inner_join(t2g_protein)
+
+  rbms1_genetype_enrich_grouped_stage <- compareCluster(
+    list(p1=unique(subset(utr_genes_cpn, 
+                          num_sites_called > 0 & grepl("P1", gene_group))$ensembl_gene_id),
+                                                           
+         p3=unique(subset(utr_genes_cpn,
+                          num_sites_called > 0 & grepl("P3", gene_group))$ensembl_gene_id),
+                                                           
+         shared=unique(subset(utr_genes_cpn, 
+                          num_sites_called > 0 & grepl("Shared", gene_group))$ensembl_gene_id)),
+    ont="ALL", keyType="ENSEMBL", 
+    OrgDb = org.Mm.eg.db, universe=unique(utr_genes_cpn$ensembl_gene_id))
+  
+  plt <- plot_goterm_dotplot(rbms1_genetype_enrich_grouped_stage@compareClusterResult) +
+    scale_color_gradient(low=accent_color_go_dark, high=accent_color_go_light)
+  
+  ggsave(plot_savefile, plot=plt, device="pdf", width=100, height=160, 
+         units="mm", useDingbats=FALSE)
+
+  write.csv(setReadable(rbms1_genetype_enrich_grouped_stage, OrgDb = org.Mm.eg.db, keyType="ENSEMBL")@compareClusterResult, file=gsub("_goterm.pdf", "_goterm_genes.csv", plot_savefile))
+  
+}
+plot_supplement_rbms1_gc_go(file.path(file_path_ref$project_directory, 
+                                      file_path_ref$plots$plot_directory, 
+                                      "supplement_12_rbms1_motif_gc_goterm.pdf"))
+
+```
+
+Supplement gene level vs isoform
+```{r}
+plot_supplement_8_last250_vs_gene_counts<- function(plot_savefile) {
+  
+  load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$all_dge_results))
+  
+  get_gene_exon_overlap <- function(gc_type) {
+    
+     valid_gc_genes <- dplyr::filter(dge_results$gene_level$gc_vs_gcf, 
+                                 if_all(matches(gc_type)))$ensembl_gene_id
+     
+     valid_gc_exon_df <- dplyr::filter(dge_results$transcript_level$gc_vs_gcf,
+                                 if_all(matches(gc_type)))
+     
+     valid_gc_exon_genes <- unique(valid_gc_exon_df$ensembl_gene_id)
+     
+      gc_gene_overlap <- data.frame(
+        gc_type=gc_type,
+        gene_group=c("Gene_Quantification", "Last_250bp_Quantification", "Overlap"),
+        counts=c(length(setdiff(valid_gc_genes, valid_gc_exon_genes)),
+                 length(setdiff(valid_gc_exon_genes, valid_gc_genes)),
+                 length(intersect(valid_gc_genes, valid_gc_exon_genes))))
+      
+      return(gc_gene_overlap)
+  }
+
+  gene_vs_exon_overlap <- data.frame(do.call(rbind,
+          lapply(c("CPN_GC_DPC23", "CPN_GC_DPC21", "CThPN_GC_DPC23"),
+                 get_gene_exon_overlap)))
+  
+  plt <- ggplot(gene_vs_exon_overlap, aes(str_wrap(gsub("_", " ", gene_group), width=15), counts, fill=gene_group)) + 
+    geom_bar(stat="identity") +
+    facet_wrap(vars(gc_type), nrow=1, scales="free_y") + 
+    scale_fill_manual(values=c(accent_color_go[5], background_color, background_color_dark)) +
+    theme_classic() +
+    theme(legend.position = "None") +
+    xlab("")
+  
+  ggsave(plot_savefile, plot=plt, height=100, width=180, units = "mm", device="pdf")
+    
+  }
+  
+
+plot_supplement_8_last250_vs_gene_counts(file.path(file_path_ref$project_directory,
+                                                file_path_ref$plots$plot_directory,
+                                                "supplement_8_last250_vs_gene_counts.pdf"))
+
+plot_supplement_8_last250_vs_gene_lengths <- function(plot_savefile) {
+  
+  load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$all_dge_results))
+  
+  get_gene_exon_length <- function(gc_type) {
+    
+     valid_gc_genes <- dplyr::filter(dge_results$gene_level$gc_vs_gcf, 
+                                 if_all(matches(gc_type)))$ensembl_gene_id
+     
+     valid_gc_exon_df <- dplyr::filter(dge_results$transcript_level$gc_vs_gcf,
+                                 if_all(matches(gc_type))) %>%
+       rowwise() %>%
+       mutate(GC_over_GCF_gene_level=ensembl_gene_id %in% valid_gc_genes,
+              gc_type=gc_type)
+     
+      
+      return(valid_gc_exon_df)
+  }
+
+  gene_vs_exon_lengths <- data.frame(do.call(rbind,
+          lapply(c("CPN_GC_DPC23", "CPN_GC_DPC21", "CThPN_GC_DPC23"),
+                 get_gene_exon_length)))
+  gene_vs_exon_overlap$gc_type <- factor(gene_vs_exon_overlap$gc_type,
+                                            levels=c("CPN_GC_DPC23", "CPN_GC_DPC21", "CThPN_GC_DPC23"))
+  
+  plt <- ggplot(gene_vs_exon_lengths, aes(utr_length_longest, color=GC_over_GCF_gene_level)) + 
+    stat_ecdf() +
+    facet_wrap(vars(gc_type), nrow=3) + 
+    scale_x_log10() +
+    scale_color_manual(values=c(background_color, accent_color_go[5])) +
+    theme_classic() +
+    xlab("")
+  
+  ggsave(plot_savefile, plot=plt, height=100, width=150, units = "mm", device="pdf")
+    
+  }
+  
+plot_supplement_8_last250_vs_gene_lengths(file.path(file_path_ref$project_directory,
+                                                file_path_ref$plots$plot_directory,
+                                                "supplement_8_last250_vs_gene_lengths.pdf"))
+
+plot_supplement_8_last250_vs_gene_sig_genelevel_not_isolevel <- function(plot_savefile) {
+  
+  gc_genes <- subset(dge_results$gene_level$gc_vs_gcf, CPN_GC_DPC23)$ensembl_gene_id
+  
+  df <- dge_results$transcript_level$gc_vs_gcf
+
+    
+  df <- df %>% 
+    rowwise() %>% 
+    mutate(is_gc_gene=ensembl_gene_id %in% gc_genes) %>% 
+    rowwise() %>% mutate(gene_group=ifelse(CPN_GC_DPC23, 
+                                           ifelse(is_gc_gene, "Both", "Last250bp_Quant_Only"), 
+                                           ifelse(is_gc_gene, "Gene_Quant_Only", "Neither"))) %>%
+    subset(!is.na(gene_group))
+  
+  
+  plt <- rasterize(ggplot(df %>% subset(!is.na(gene_group)), 
+                aes(baseMean.CPN_GC_DPC23.vs.Forebrain_Background, 
+                    log2FoldChange.CPN_GC_DPC23.vs.Forebrain_Background, 
+                    color=gene_group)) + geom_point(alpha=0.5, size=0.5), dpi=300) + 
+    theme_classic() + 
+    facet_wrap(vars(gene_group), ncol=1) + 
+    geom_vline(xintercept=1000, linewidth=0.5, linetype="dashed", color=background_color_dark) +  
+    geom_hline(yintercept=0.5, linewidth=0.5, linetype="dashed", color=background_color_dark) + 
+    scale_x_log10() +
+    scale_color_manual(values=c(accent_color_dark, 
+                                background_color_dark,
+                                accent_color_go_scale[5],
+                                background_color)) +
+    theme(legend.position = "None")
+
+    ggsave(plot_savefile, plot=plt, height=200, width=100, units = "mm", device="pdf")
+
+}
+
+plot_supplement_8_last250_vs_gene_sig_genelevel_not_isolevel(file.path(file_path_ref$project_directory,
+                                                file_path_ref$plots$plot_directory,
+                                                "supplement_8_last250_vs_gene_sig_genelevel_not_isolevel.pdf"))
+```
+
+```{r}
+plot_supplement_8_mapt_utr <- function(plot_savefile) {
+  
+ load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$all_dge_results))
+  
+   mapt_isoforms <- subset(t2g_protein, 
+                          external_gene_name == "Mapt")
+   
+  
+  cpm_iso_mapt <- dge_results$transcript_level$CPM %>% 
+    subset(ensembl_transcript_id %in% mapt_isoforms$ensembl_transcript_id) %>%
+    dplyr::rename(quant_group=ensembl_transcript_id) %>%
+    dplyr::select(c(quant_group, sample_type, CPM))
+  
+  cpm_gene_mapt <- dge_results$gene_level$CPM %>%
+    subset(ensembl_gene_id %in% mapt_isoforms$ensembl_gene_id) %>%
+    dplyr::rename(quant_group=ensembl_gene_id) %>%
+    dplyr::select(c(quant_group, sample_type, CPM))
+  
+  cpm_mapt <- rbind(cpm_iso_mapt, cpm_gene_mapt) %>%
+    subset(sample_type %in% c("Forebrain_GCF_DPC23", "CPN_Soma_DPC23", "CPN_GC_DPC23"))
+  
+  cpm_mapt$sample_type <- factor(cpm_mapt$sample_type, 
+                                 levels=c("Forebrain_GCF_DPC23",
+                                          "CPN_GC_DPC23", "CPN_Soma_DPC23"))
+  
+ plt <- ggplot(cpm_mapt, aes(quant_group, CPM, fill=sample_type)) +
+   geom_boxplot(color=background_color_dark, linewidth=0.1, outlier.colour = NA) + geom_point(position=position_dodge(0.8), color=background_color_dark, size=0.5) + theme_classic() + 
+   scale_fill_manual(values=c(background_color, cpn_color_light, cpn_color_dark)) +
+   coord_flip()
+ 
+ ggsave(plot_savefile, plot=plt, height=60, width=180, units="mm", useDingbats=FALSE)
+}
+
+plot_supplement_8_mapt_utr(file.path(file_path_ref$project_directory,
+                                     file_path_ref$plots$plot_directory, 
+                                     "supplement_8_mapt_utr_quantification.pdf"))
+
+```
+
+### PAUSE because overlap of irclip and motif id'd is not great
+```{r}
+plot_supplement_rbms1_irclip <- function(plot_savefile){
+  
+rbms1_irclip <- read_xlsx(file.path(file_path_ref$project_directory,
+                                    file_path_ref$external_data$rbms1_irclip), 
+                          sheet = "RBMS1 targets (irCLIP)",
+                          skip=1) %>%
+  separate_rows(`RefSeq ID`, sep=",")
+
+hsapiens_ensembl <- biomaRt::useEnsembl(biomart="ensembl",
+                                  dataset="hsapiens_gene_ensembl")
+
+rbms1_targets_ensembl <- getBM(c("refseq_mrna", "ensembl_gene_id"),
+      filters="refseq_mrna",
+      values=unique(rbms1_irclip$`RefSeq ID`),
+      mart=hsapiens_ensembl)
+
+rbms1_targets_mouse <- getBM(c("ensembl_gene_id", "mmusculus_homolog_ensembl_gene"),
+                             filters="ensembl_gene_id",
+                             values=unique(rbms1_targets_ensembl$ensembl_gene_id),
+                             mart=hsapiens_ensembl)
+
+rbms1_irclip <- rbms1_irclip %>% 
+  inner_join(rbms1_targets_ensembl, 
+             by=c("RefSeq ID" = "refseq_mrna")) %>%
+  inner_join(rbms1_targets_mouse)
+
+rbms1_irclip_3utr <- rbms1_irclip %>% subset(`3UTR` > 0)
+rbms1_irclip_mrna_mature <- rbms1_irclip %>% subset(`3UTR` > 0 | `5UTR` > 0 | Exonic > 0)
+
+# load the dge info
+load(file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$cpn_gc_comparison))
+load(file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$gc_vs_gcf_comparison))
+
+load(file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$cpn_soma_comparison))
+
+cpn_dge_both <- data.frame(rbind(subset(gc_res, is_valid_gc) %>%
+                                   dplyr::select(log2FoldChange, padj, ensembl_gene_id) %>%
+                                   rowwise() %>% mutate(compartment="GC"),
+                                  dge_res %>%
+                                   dplyr::select(log2FoldChange, padj, ensembl_gene_id) %>%
+                                   rowwise() %>% mutate(compartment="Soma"))) %>%
+  rowwise() %>% 
+  mutate(is_rbms1=ensembl_gene_id %in% unique(rbms1_irclip$mmusculus_homolog_ensembl_gene))
+
+
+n_soma_rbms1 <- cpn_dge_both %>% subset(compartment == "Soma" & is_rbms1) %>% nrow()
+n_soma <- cpn_dge_both %>% subset(compartment == "Soma") %>% nrow()
+
+dpc23_gc <- gc_enrich_genes$CPN_GC_DPC23 #setdiff(gc_enrich_genes$CPN_GC_DPC23, gc_enrich_genes$CPN_GC_DPC21)
+dpc21_gc <- gc_enrich_genes$CPN_GC_DPC21 #setdiff(gc_enrich_genes$CPN_GC_DPC21, gc_enrich_genes$CPN_GC_DPC23)
+shared_gc <- intersect(gc_enrich_genes$CPN_GC_DPC23, gc_enrich_genes$CPN_GC_DPC21)
+
+n_gc_rbms1 <- cpn_dge_both %>% subset(compartment == "GC" & is_rbms1) %>% nrow()
+n_gc <- cpn_dge_both %>% subset(compartment == "GC") %>% nrow()
+
+n_gc_rbms1_dpc23 <- cpn_dge_both %>% subset(compartment == "GC" & is_rbms1 &  ensembl_gene_id %in% dpc23_gc) %>% nrow()
+n_gc_dpc23 <- cpn_dge_both %>% subset(compartment == "GC" & ensembl_gene_id %in% dpc23_gc) %>% nrow()
+
+n_gc_rbms1_shared <- cpn_dge_both %>% subset(compartment == "GC" & is_rbms1 &  ensembl_gene_id %in% shared_gc) %>% nrow()
+n_gc_shared <- cpn_dge_both %>% subset(compartment == "GC" & ensembl_gene_id %in% shared_gc) %>% nrow()
+
+n_gc_rbms1_dpc21 <- cpn_dge_both %>% subset(compartment == "GC" & is_rbms1 &  ensembl_gene_id %in% dpc21_gc) %>% nrow()
+n_gc_dpc21 <- cpn_dge_both %>% subset(compartment == "GC" & ensembl_gene_id %in% dpc21_gc) %>% nrow()
+
+# show gc/soma enrichment
+fishermat_dpc23 <- matrix(c(n_gc_rbms1_dpc23, n_soma_rbms1-n_gc_rbms1_dpc23, 
+                            n_gc_dpc23-n_gc_rbms1_dpc23, 
+                            n_soma-n_soma_rbms1-n_gc_dpc23), nrow = 2)
+
+
+fishermat_dpc21 <- matrix(c(n_gc_rbms1_dpc21, n_soma_rbms1-n_gc_rbms1_dpc21, 
+                            n_gc_dpc21-n_gc_rbms1_dpc21, 
+                            n_soma-n_soma_rbms1-n_gc_dpc21), nrow = 2)
+
+fishermat_dpc23_gc <- matrix(c(n_gc_rbms1_dpc23, n_gc_rbms1-n_gc_rbms1_dpc23, 
+                            n_gc_dpc23-n_gc_rbms1_dpc23, 
+                            n_gc-n_gc_rbms1-n_gc_dpc23), nrow = 2)
+
+
+fishermat_dpc21_gc <- matrix(c(n_gc_rbms1_dpc21, n_gc_rbms1-n_gc_rbms1_dpc21, 
+                            n_gc_dpc21-n_gc_rbms1_dpc21, 
+                            n_gc-n_gc_rbms1-n_gc_dpc21), nrow = 2)
+
+fisher_res_dpc23 <- fisher.test(fishermat_dpc23)
+
+fisher_res_dpc21 <- fisher.test(fishermat_dpc21)
+
+fisher_res_dpc23_gc <- fisher.test(fishermat_dpc23_gc)
+
+fisher_res_dpc21_gc <- fisher.test(fishermat_dpc21_gc)
+
+fisher_res <- data.frame(enrichment=c(fisher_res_dpc21$estimate, 
+                                      fisher_res_dpc23$estimate,
+                                      fisher_res_dpc21_gc$estimate,
+                                      fisher_res_dpc23_gc$estimate),
+                         ci_low=c(fisher_res_dpc21$conf.int[1], 
+                                  fisher_res_dpc23$conf.int[1],
+                                  fisher_res_dpc21_gc$conf.int[1], 
+                                  fisher_res_dpc23_gc$conf.int[1]),
+                         ci_high=c(fisher_res_dpc21$conf.int[2],
+                                   fisher_res_dpc23$conf.int[2],
+                                   fisher_res_dpc21_gc$conf.int[2],
+                                   fisher_res_dpc23_gc$conf.int[2]),
+                         gene_group=c("CPN_GC_DPC21_vs_Soma", "CPN_GC_DPC23_vs_Soma", "CPN_GC_DPC21_vs_GC", "CPN_GC_DPC23_vs_GC"))
+
+
+ggplot(fisher_res, aes(gene_group, enrichment)) + 
+  geom_point(size=4) + 
+  geom_errorbar(data=fisher_res, 
+                mapping=aes(x=gene_group, ymin=ci_low, ymax=ci_high),
+                width=0.1, linewidth=1) +
+  ylim(0.1, NA) + 
+  geom_hline(yintercept=1, linetype="dashed") +
+  coord_flip() +
+  theme_classic() 
+```
+
+}
+```

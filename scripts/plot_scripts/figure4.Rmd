@@ -1,0 +1,636 @@
+---
+title: "figure4"
+author: "Priya Veeraraghavan"
+date: "2023-04-05"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warnings=FALSE)
+```
+
+Load all the profiled genes 
+```{r}
+library(rjson)
+library(transite)
+input <- "C:/Users/prv892/Documents/GitHub/amalgam/metadata.json"
+
+file_path_ref <- fromJSON(file = input)
+
+
+# import the relevant parameters and references
+source(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$setup_script))
+
+source(file.path(file_path_ref$project_directory,
+                 file_path_ref$plots$setup_script))
+```
+
+```{r}
+plot_main_4a <- function(plot_savefile) {
+  load(file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$dpc23_cpn_cth_gc_vs_soma_utr_info))
+
+
+mean_comparisons <- list(c("P3_CTh_Soma", "P3_CTh_GC"), c("P3_CPN_Soma", "P3_CPN_GC"))
+plt <- ggplot(dpc23_gc_res, aes(gene_group, utr_length_longest+1, 
+                         fill=gene_group)) + 
+  geom_violin(draw_quantiles = 0.5) +
+  scale_fill_manual(values=c(cthpn_color_dark, cthpn_color_light, cpn_color_dark, cpn_color_light)) +
+  theme(legend.position="None", text=element_text(size=7)) +
+  stat_compare_means(method = "anova", label.y=5.5, size=3)+
+  stat_compare_means(aes(label=after_stat(p.signif)), comparisons=mean_comparisons, method="wilcox.test") +
+  scale_y_log10() +
+  theme_classic() +
+  xlab("") + theme(legend.position = "None")
+
+plot(plt)
+ ggsave(plot_savefile, plot=plt, device="pdf", height=122, width=102, units="mm", dpi=300)
+
+
+}
+
+plot_main_4a(file.path(file_path_ref$project_directory, file_path_ref$plots$plot_directory, "main_4a.pdf"))
+
+```
+
+Plot scatterplot comparing the motif enrichment in CPN Transcripts and CThPN Transcripts
+```{r}
+# for each rbp combine p-vals of associated motifs
+collapse_rbps_motif <- function(enrichment_df) {
+  agg_df <- enrichment_df %>% 
+    separate_rows(motif_rbps, sep=",") %>%
+    rowwise() %>%
+    mutate(motif_rbps=gsub("SFRS1", "SRSF1", gsub(" ", "", motif_rbps))) %>%
+    group_by(motif_rbps) %>%
+    summarize(mean_enrichment=mean(enrichment),
+              max_enrichment=max(enrichment),
+              min_enrichment=min(enrichment),
+           pval=p_combine(p_value)$p_value)
+  
+  agg_df <- data.frame(agg_df)
+  agg_df$padj <- p.adjust(agg_df$pval, method="fdr")
+  
+  return(agg_df)
+}
+
+plot_main_4b <- function(plot_savefile) {
+  load(file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$dpc23_cpn_cth_gc_vs_soma_utr_motifs))
+  
+  cpn_enrichment <- collapse_rbps_motif(cpn_utr_enrichment)
+  cth_enrichment <- collapse_rbps_motif(cth_utr_enrichment)
+
+  both_enrichment <- cpn_enrichment %>% 
+    inner_join(cth_enrichment, by="motif_rbps", suffix=c(".cpn", ".cth")) %>%
+    rowwise() %>%
+    mutate(enrichment_type=ifelse(padj.cpn < 0.05 & mean_enrichment.cpn > 1,
+                                  ifelse(padj.cth < 0.05 & mean_enrichment.cth > 1, 
+                                         "Both Enriched","CPN Enriched"),
+                                  "Neither Enriched"))
+  
+  both_enrichment_labels <- subset(both_enrichment, motif_rbps %in% c("RALY", "CPEB4", "TIA1", "SFPQ", "QKI", "FMRP", "FMR1", "FXR1", "FXR2", "IGF2BP1", "IGF2BP2", "IGF2BP3", "PUM1", "PUM2"))
+  
+ plt <-  rasterize(ggplot(both_enrichment, aes(mean_enrichment.cpn, mean_enrichment.cth, color=enrichment_type)) + 
+    geom_point() +
+    geom_errorbar(data=both_enrichment, mapping=aes(ymin=min_enrichment.cth, ymax=max_enrichment.cth), alpha=0.2) +
+    geom_errorbar(data=both_enrichment, mapping=aes(xmin=min_enrichment.cpn, xmax=max_enrichment.cpn), 
+                  alpha=0.2), dpi=300) +
+    geom_text_repel(data=both_enrichment_labels, mapping=aes(mean_enrichment.cpn, mean_enrichment.cth, label=motif_rbps)) +
+    theme_classic() +
+  scale_x_log10() +
+    scale_y_log10() +
+    geom_hline(yintercept=1, color=background_color_dark, linetype="dashed") + 
+    geom_vline(xintercept=1, color=background_color_dark, linetype="dashed") +
+    scale_color_manual(values=c(accent_color_scale_dark, accent_color_dark, background_color)) +
+    xlab("Motif Enrichment CPN") +
+    ylab("Motif Enrichment CThPN") +
+   theme(legend.position="None") +
+   xlim(NA, 1.7) +
+   ylim(NA, 2.1)
+ 
+ plot(plt)
+ ggsave(plot_savefile, plot=plt, device="pdf", height=122, width=142, units="mm", dpi=300)
+
+  
+  
+}
+
+plot_main_4b(file.path(file_path_ref$project_directory, file_path_ref$plots$plot_directory, "main_4b.pdf"))
+```
+
+```{r}
+plot_main_4c <- function(plot_savefile) {
+  
+  # mrna_binding: GO:0003729
+  # rna binding: GO:0003723
+  rbps <- AnnotationDbi::select(org.Mm.eg.db,  keytype="GOALL", keys="GO:0003729", columns = "ENSEMBL") %>%
+    dplyr::select(ENSEMBL) %>%
+    unique() 
+  rbps <- rbind(rbps, data.frame(ENSEMBL="ENSMUSG00000027593"))
+  
+  load(file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$all_dge_results))
+  
+  dge_res <- dge_results$gene_level$cpn_soma_dpc23_vs_cth_soma_dpc23
+  
+  rbps_dge <- rbps %>% 
+    inner_join(dge_res, by=c("ENSEMBL" = "ensembl_gene_id")) %>% 
+    subset(baseMean  > 100) %>%
+    rowwise() %>%
+    mutate(gene_type=ifelse(padj < 0.05 & abs(log2FoldChange) > 1, 
+                            ifelse(log2FoldChange > 0, "CTh", "CPN"),
+                            "Shared"))
+  
+  rbps_to_name <- c(c("Raly", "Tia1", "Cpeb4"), subset(rbps_dge, (abs(log2FoldChange) > 1.25 & baseMean > 500) | (abs(log2FoldChange) > 1 & baseMean > 5000))$external_gene_name)
+  
+  rbps_named_df <- subset(rbps_dge, external_gene_name %in% rbps_to_name)
+  
+  plt <- rasterize(ggplot(rbps_dge, aes(baseMean, log2FoldChange, color=gene_type)) +
+    geom_point(), dpi=300) +
+    scale_x_log10() +
+    geom_hline(yintercept=0, linetype="dashed", color=background_color_dark) +
+    geom_text_repel(data=rbps_named_df, mapping=aes(baseMean, log2FoldChange, label=external_gene_name, color=gene_type),
+                    min.segment.length = 0) +
+    scale_color_manual(values=c(cpn_color_dark, cthpn_color_dark, background_color)) +
+    theme_classic() +
+    theme(legend.position = "None") +
+    ylab("Log2 Fold Change CTh/CPN Soma") +
+    xlab("Mean Normalized Counts")
+  
+  plot(plt)
+  
+  ggsave(plot_savefile, plot=plt, device="pdf", height=122, width=142, units="mm", dpi=300)
+
+  
+}
+
+plot_main_4c(file.path(file_path_ref$project_directory, file_path_ref$plots$plot_directory, "main_4c.pdf"))
+```
+Look at how many matching hexamers per utr
+Appears that the cthpn gc utrs have the most pattern calls per utr
+and that for the paterns probably the ones with most contiguous t's have the most calls.
+```{r}
+read_nhexamers_per_utr <- function(hexamer_dir) {
+  
+  hexamer_dir <- file.path(file_path_ref$project_directory, 
+                     "data/sequencing/differential_expression", 
+                     hexamer_dir)
+  hexamer_files <- list.files(hexamer_dir)
+  
+  res <- data.frame(do.call(rbind,
+                            lapply(hexamer_files, 
+                                   function(hex) read.csv(file.path(hexamer_dir, 
+                     hex))))) %>%
+    group_by(pattern, ensembl_transcript_id) %>%
+    summarize(num_hits=n())
+  
+  return(res)
+}
+
+get_motif_stretches <- function(txpt_df) {
+  
+  return(data.frame(reduce(GRanges(Rle(txpt_df$ensembl_transcript_id), ranges=IRanges(start=txpt_df$start, end=txpt_df$end)))))
+  
+}
+
+read_nmotifs_per_utr <- function() {
+  
+  hexamer_dir <- file.path(file_path_ref$project_directory, 
+                     "data/sequencing/differential_expression/cpeb4_hexamer_patterns")
+  hexamer_files <- list.files(hexamer_dir)
+  
+  res <- data.frame(do.call(rbind,
+                            lapply(hexamer_files, 
+                                   function(hex) read.csv(file.path(hexamer_dir, 
+                     hex))))) 
+  
+  motif_stretches_file <- file.path(file_path_ref$project_directory, "data/sequencing/differential_expression/cpeb4_contiguous_motifs.RData")
+  if (file.exists(motif_stretches_file)) {
+    load(motif_stretches_file)
+  } else {
+  res_motif_stretches <- data.frame(do.call(rbind,
+                                            lapply(unique(res$ensembl_transcript_id), function(txpt) get_motif_stretches(subset(res, ensembl_transcript_id == txpt)))))
+  
+  save(res_motif_stretches, file=motif_stretches_file)
+  }
+  
+  
+  max_res_motif_stretches <- res_motif_stretches %>%
+    dplyr::rename(ensembl_transcript_id=seqnames) %>%
+    group_by(ensembl_transcript_id) %>% summarize(max_motif_stretch=max(width), num_motif_stretch=n()) %>% full_join(dpc23_gc_res, by=c("ensembl_transcript_id" = "longest_txpt")) %>%
+    rowwise() %>%
+    mutate(max_motif_stretch=ifelse(is.na(max_motif_stretch), 0, max_motif_stretch),
+           num_motif_stretch=ifelse(is.na(num_motif_stretch), 0, num_motif_stretch))
+  
+  return(max_res_motif_stretches)
+}
+  
+plot_motif_stretches <- function(plot_savefiles) {
+  max_res_motif_stretches <- read_nmotifs_per_utr()
+
+  plt <- ggplot(max_res_motif_stretches, aes(max_motif_stretch, color=gene_group)) + stat_ecdf() + scale_x_log10() + theme_classic() + scale_color_manual(values=c(cthpn_color_dark, cthpn_color_light, cpn_color_dark, cpn_color_light)) +
+    xlab("Length of Longest Contiguous Binding Site")
+  
+  plot(plt)
+  
+  ggsave(plot_savefiles[1], plot=plt, device="pdf", height=60, width=120, units="mm")
+  
+  plt <- ggplot(max_res_motif_stretches, aes((num_motif_stretch)/utr_length_longest*1000, color=gene_group)) + stat_ecdf()  + theme_classic() + scale_color_manual(values=c(cthpn_color_dark, cthpn_color_light, cpn_color_dark, cpn_color_light)) + xlab("Number of Contiguous Binding Sites Normalized to 1000bp UTR") + xlim(NA, 30)
+  
+  plot(plt)
+  
+  ggsave(plot_savefiles[2], plot=plt, device="pdf", height=60, width=120, units="mm")
+
+}
+
+plot_motif_stretches(file.path(file_path_ref$project_directory, 
+                               file_path_ref$plots$plot_directory, 
+                               c("supplement_11_longest_contiguous_binding_site.pdf", 
+                                 "supplement_11_number_contiguous_binding_sites_norm.pdf")))
+```
+
+Looking at the hexamer identities, really seems as though really there's a U-stretch enrichment, possibly with UUUUUG as well
+```{r}
+plot_hexamers_per_utr_group <- function(plot_savefile) {
+  load(file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$dpc23_cpn_cth_gc_vs_soma_utr_info))
+  
+
+  utr_hexamer_counts <- read_nhexamers_per_utr("cpeb4_hexamer_patterns") %>% 
+        inner_join(dpc23_gc_res, 
+                                     by=c("ensembl_transcript_id" = "longest_txpt")) %>% group_by(gene_group, pattern) %>% summarize(num_hits=sum(num_hits))
+  
+  utr_hexamer_ratios <- utr_hexamer_counts %>% group_by(gene_group) %>% summarize(num_hits_total=sum(num_hits)) %>% inner_join(utr_hexamer_counts, by="gene_group") %>% rowwise() %>% mutate(prop_hits=num_hits/num_hits_total) 
+  
+  plt <- ggplot(utr_hexamer_ratios, aes(pattern, prop_hits, fill=gene_group)) + geom_bar(stat="identity", position=position_dodge()) +
+    theme_classic() +
+    scale_fill_manual(values=c(cthpn_color_dark, cthpn_color_light, cpn_color_dark, cpn_color_light)) +
+    coord_flip()
+    
+  plot(plt)
+  
+   ggsave(plot_savefile, plot=plt, device="pdf", height=240, width=120, units="mm")
+
+    
+
+  
+}
+
+
+
+plot_hexamers_per_utr_group(file.path(file_path_ref$project_directory,
+                                      file_path_ref$plots$plot_directory,
+                                      "supplement_11_proportion_cpeb4_hexmer.pdf"))
+
+```
+Require PAS to be within 30nt of the 3' end of transcript
+And look for the Cpeb4 binding site that is closest to the most distal PAS
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8011179/
+```{r}
+read_hexamer_loc_per_utr <- function(hexamer_dirname) {
+  load(file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$dpc23_cpn_cth_gc_vs_soma_utr_info))
+  
+  quantseq <- read_counts_last250[,grepl("QuantSeq", colnames(read_counts_last250))]
+quantseq_norm <- data.frame(sweep(quantseq, 2, colSums(quantseq), "/")*1e6)
+quantseq_norm$valid <- rowSums(quantseq_norm > 2) == 3
+quantseq_norm$Geneid_first <- read_counts_last250$Geneid_first
+
+
+  hexamer_dir <- file.path(file_path_ref$project_directory, 
+                     "data/sequencing/differential_expression", hexamer_dirname)
+  hexamer_files <- list.files(hexamer_dir)
+  
+  res <- data.frame(do.call(rbind,
+                            lapply(hexamer_files, 
+                                   function(hex) read.csv(file.path(hexamer_dir, 
+                     hex))))) 
+  
+  res <- res %>% inner_join(dpc23_gc_res, 
+               by=c("ensembl_transcript_id" = "longest_txpt")) %>%
+    rowwise() %>%
+    mutate(distance_to_3end=utr_length_longest-end+1)
+  
+  most_distal <- res %>% group_by(ensembl_transcript_id,
+                                  utr_length_longest, gene_group) %>%
+    summarize(min_dist_to_3end=min(distance_to_3end),
+              nsites=n())
+  
+  plt <- ggplot(most_distal, aes(min_dist_to_3end, color=gene_group)) + stat_ecdf() + scale_x_log10() + theme_classic() + scale_color_manual(values=c(cthpn_color_dark, cthpn_color_light, cpn_color_dark, cpn_color_light))
+  plot(plt)
+ 
+  return(res)
+}
+
+# plot relative location of cpeb4 hexamers along utrs
+plot_cpeb4_locations <- function(plot_savefile) {
+  cpeb4_locs <- read_hexamer_loc_per_utr("cpeb4_hexamer_patterns")
+  plt <- ggplot(cpeb4_locs, aes(1-distance_to_3end/utr_length_longest, color=gene_group)) + 
+  geom_density() +
+  theme_classic() + 
+  scale_color_manual(values=c(cthpn_color_dark, cthpn_color_light, cpn_color_dark, cpn_color_light)) +
+  xlab("5' End <- Relative Location In 3'UTR -> 3'End")
+  
+  ggsave(plot_savefile, plot=plt,  device="pdf", height=60, width=120, units="mm")
+
+
+}
+plot_cpeb4_locations(file.path(file_path_ref$project_directory, 
+                               file_path_ref$plots$plot_directory,
+                               "supplement_11_cpeb4_hexamer_locations_3utr_relative.pdf"))
+
+plot_spacer_distal_cpeb4_pas <- function(plot_savefile){
+  # get cpeb4 hexamer locations  
+  cpeb4_locs <- read_hexamer_loc_per_utr("cpeb4_hexamer_patterns")
+  
+  # get pas site locations
+  pas_locs <- read_hexamer_loc_per_utr("pas_hexamer_patterns")
+  
+  # identify distal PAS
+  pas_locs_distal <- pas_locs %>%
+  group_by(ensembl_transcript_id, gene_group) %>%
+  summarize(min_dist_to_3end=min(distance_to_3end),
+            relative_length_pas=utr_length_longest[1]-min(distance_to_3end))
+  
+  cpeb4_locs_distal <- cpeb4_locs %>% inner_join(pas_locs_distal, by=c("gene_group", "ensembl_transcript_id")) %>%
+  subset(end < relative_length_pas-6 & min_dist_to_3end < 36 ) %>%
+  group_by(ensembl_transcript_id, gene_group) %>%
+  summarize(min_dist_to_pas=relative_length_pas[1]-max(end))
+
+  plt <- ggplot(cpeb4_locs_distal, aes(min_dist_to_pas, color=gene_group)) +  stat_ecdf()  + theme_classic() + scale_color_manual(values=c(cthpn_color_dark, cthpn_color_light, cpn_color_dark, cpn_color_light)) + scale_x_log10() +
+  xlab("Distance Between Cpeb4 Motif and Distal PAS")
+
+   ggsave(plot_savefile, plot=plt,  device="pdf", height=60, width=120, units="mm")
+
+}
+plot_spacer_distal_cpeb4_pas(file.path(file_path_ref$project_directory, 
+                               file_path_ref$plots$plot_directory,
+                               "supplement_11_distance_between_distal_cpeb4_PAS.pdf"))
+
+get_min_motif_dist <- function(motif_starts) {
+  starts <- motif_starts
+  min_motifs <- sapply(starts, 
+                       function(s) { 
+                         dists <- abs(s-starts)
+                         dists <- dists[dists > 6] # based on 10-12nt gap 
+                         if (length(dists) > 0) {
+                         return(min(dists))
+                         } else {
+                           return(Inf)
+                         }
+                         })
+  
+  return(paste0(min_motifs, collapse=";"))
+  }
+  
+plot_spacer_cpeb4_motifs <- function(plot_savefile) {
+  
+   # get cpeb4 hexamer locations  
+  cpeb4_locs <- read_hexamer_loc_per_utr("cpeb4_hexamer_patterns")
+
+min_motif_distances_cpeb4 <- cpeb4_locs %>% 
+  group_by(ensembl_transcript_id, gene_group) %>%
+  summarize(min_cpeb4_dist=get_min_motif_dist(start)) %>%
+  separate_rows(min_cpeb4_dist, sep=";") %>%
+  rowwise() %>% 
+  mutate(min_cpeb4_dist=as.numeric(min_cpeb4_dist))
+
+
+  plt <- ggplot(min_motif_distances_cpeb4 %>% 
+                  group_by(ensembl_transcript_id, gene_group) %>% 
+                  summarize(min_cpeb4_dist=min(min_cpeb4_dist)), 
+                aes(min_cpeb4_dist, color=gene_group)) + 
+    stat_ecdf() + 
+    scale_x_log10() + 
+    theme_classic() + 
+    scale_color_manual(values=c(cthpn_color_dark, cthpn_color_light, 
+                                cpn_color_dark, cpn_color_light)) +
+   geom_vline(xintercept=16, linetype='dashed', color=background_color_dark) +
+    geom_vline(xintercept=56, linetype='dashed', color=background_color_dark) +
+   xlab("Minimum Distance Between Two Cpeb4 Motifs per Transcript")
+
+  plot(plt)
+  ggsave(plot_savefile, plot=plt,  device="pdf", height=60, width=120, units="mm")
+}
+
+plot_spacer_cpeb4_motifs(file.path(file_path_ref$project_directory, 
+                               file_path_ref$plots$plot_directory,
+                               "supplement_11_minimum_distance_between_cpeb4_motifs.pdf"))
+
+
+```
+Look check with quantseq data
+```{r}
+load(file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$dpc23_cpn_cth_gc_vs_soma_utr_info))
+
+quantseq <- read_counts_last250[,grepl("QuantSeq", colnames(read_counts_last250))]
+quantseq_norm <- data.frame(sweep(quantseq, 2, colSums(quantseq), "/")*1e6)
+quantseq_norm$valid <- rowSums(quantseq_norm > 2) == 3
+quantseq_norm$Geneid_first <- read_counts_last250$Geneid_first
+
+quantseq_norm <- quantseq_norm %>% inner_join(dpc23_gc_res, by="Geneid_first") %>% subset(grepl("CPN", gene_group))
+
+hexamer_dirname <- "cpeb4_hexamer_patterns"
+  hexamer_dir <- file.path(file_path_ref$project_directory, 
+                     "data/sequencing/differential_expression", hexamer_dirname)
+  hexamer_files <- list.files(hexamer_dir)
+  
+  res <- data.frame(do.call(rbind,
+                            lapply(hexamer_files, 
+                                   function(hex) read.csv(file.path(hexamer_dir, 
+                     hex))))) 
+  
+  res <- res %>% inner_join(quantseq_norm, 
+               by=c("ensembl_transcript_id" = "longest_txpt")) %>%
+    rowwise() %>%
+    mutate(distance_to_3end=utr_length_longest-end+1)
+  
+  most_distal <- res %>% group_by(ensembl_transcript_id,
+                                  utr_length_longest, gene_group) %>%
+    summarize(min_dist_to_3end=min(distance_to_3end),
+              nsites=n())
+  
+  plt <- ggplot(most_distal, aes(min_dist_to_3end, color=gene_group)) + stat_ecdf() + scale_x_log10() + theme_classic() + scale_color_manual(values=c(cthpn_color_dark, cthpn_color_light, cpn_color_dark, cpn_color_light))
+  plot(plt)
+```
+
+```{r}
+load(file.path(file_path_ref$project_directory, "data/sequencing/differential_expression/dpc23_gc_comparison_noShared.TSMA_results.RData"))
+#file_path_ref$sequencing$results$dpc23_cpn_cth_gc_vs_soma_utr_info))
+
+ all_cpn_gc_cpeb4 <- data.frame(ensembl_transcript_id=names(cpn_gc_utr_scores$total_sites[[85]]),
+                             nsites=cpn_gc_utr_scores$absolute_hits[[85]],
+                             location="CPN_GC") %>% inner_join(t2g_protein, by="ensembl_transcript_id")
+ 
+ all_cth_gc_cpeb4 <- data.frame(ensembl_transcript_id=names(cth_gc_utr_scores$total_sites[[85]]),
+                             nsites=cth_gc_utr_scores$absolute_hits[[85]],
+                             location="CTh_GC") %>% inner_join(t2g_protein, by="ensembl_transcript_id")
+
+
+ all_cpn_soma_cpeb4 <- data.frame(ensembl_transcript_id=names(cpn_soma_utr_scores$total_sites[[85]]),
+                             nsites=soma_gc_utr_scores$absolute_hits[[85]],
+                             location="Soma") %>%
+  inner_join(t2g_protein, by="ensembl_transcript_id")
+  
+ all_cpn_gc_cpeb4_counts <- all_cpn_gc_cpeb4 %>%
+   group_by(nsites, location) %>%
+   summarize(txpt_count=n()) 
+   all_cpn_gc_cpeb4_counts$percent <- all_cpn_gc_cpeb4_counts$txpt_count/sum(all_cpn_gc_cpeb4_counts$txpt_count)
+
+ 
+
+ 
+ all_soma_cpeb4_counts <- all_soma_cpeb4 %>%
+     group_by(nsites, location) %>%
+   summarize(txpt_count=n()) 
+ 
+  all_soma_cpeb4_counts$percent <- all_soma_cpeb4_counts$txpt_count/sum(all_soma_cpeb4_counts$txpt_count)
+ 
+ 
+ cpeb4_counts <- rbind(all_cpn_gc_cpeb4_counts, all_soma_cpeb4_counts) 
+ 
+ ggplot(cpeb4_counts, aes(nsites, percent, fill=location)) + geom_bar(position=position_dodge(), stat="identity") +
+   theme_classic()
+ 
+ %>%
+   inner_join(dpc23_gc_res_grouped, by=c("ensembl_transcript_id" = "longest_txpt")) %>%
+   inner_join(t2g_protein, by=c("ensembl_transcript_id"))
+ 
+ ggplot(subset(all_cpn_cpeb4, grepl("CPN", expression_group)),
+        aes(nsites/utr_length_longest, utr_length_longest)) + geom_point() geom_violin(draw_quantiles = 0.5) +
+   scale_y_log10()
+ 
+ 
+ all_cth_cpeb4 <- data.frame(ensembl_transcript_id=names(cth_utr_scores$total_sites[[85]]),
+                             nsites=cth_utr_scores$absolute_hits[[85]])%>%
+   full_join(dpc23_gc_res_grouped, by=c("ensembl_transcript_id" = "longest_txpt"))
+
+```
+
+
+```{r}
+plot_figure_4c <- function() {
+  txpt_to_gene <- function(txpt_vec) {
+    return(unique((t2g_protein %>% subset(ensembl_transcript_id %in% txpt_vec))$ensembl_gene_id))
+  }
+  
+  all_cpn_cpeb4 <- names(cpn_utr_scores$total_sites[[85]])[cpn_utr_scores$absolute_hits[[85]] > 0]
+  all_cth_cpeb4 <- names(cth_utr_scores$total_sites[[85]])[cth_utr_scores$absolute_hits[[85]] > 0]
+  
+  max_cpn_cpeb4 <- names(cpn_utr_scores$total_sites[[85]])[cpn_utr_scores$absolute_hits[[85]] > 4]
+  max_cth_cpeb4 <- names(cth_utr_scores$total_sites[[85]])[cth_utr_scores$absolute_hits[[85]] > 4]
+ 
+  goterm_enrich <- compareCluster(list(all_cpn=txpt_to_gene(all_cpn_cpeb4), all_cth=txpt_to_gene(all_cth_cpeb4),
+                      max_cpn=txpt_to_gene(max_cpn_cpeb4), max_cth=txpt_to_gene(max_cth_cpeb4)),
+                 ont="ALL", keyType="ENSEMBL", OrgDb=org.Mm.eg.db, universe=union(cpn_soma_valid_genes, cth_soma_valid_genes))
+  
+  # plot goterm enrichment for genes that are most regulated by cpeb4
+  plt <- plot_goterm_dotplot(subset(simplify(goterm_enrich)@compareClusterResult, Cluster %in% c("max_cpn", "max_cth")), ncategory=8)
+
+  
+}
+```
+```{r}
+load(file.path(file_path_ref$project_dir, file_path_ref$sequencing$results$cpn_soma_comparison))
+dge_res_cpn <- dge_res
+ggplot(dge_res, aes(log2FoldChange, -log10(padj))) + geom_point() 
+```
+
+```{r}
+
+load(file.path(file_path_ref$project_dir, file_path_ref$sequencing$results$cpn_gc_comparison))
+dge_res_cpn_gc <- gc_res
+```
+
+
+##################
+
+```{r}
+load(file.path(file_path_ref$project_dir, file_path_ref$sequencing$results$cthpn_soma_comparison))
+
+dge_res_cth <- dge_res
+ggplot(dge_res, aes(log2FoldChange, -log10(padj))) + geom_point() 
+
+```
+
+```{r}
+desired_cols <- c("ensembl_gene_id", "log2FoldChange", "padj", "baseMean", "external_gene_name")
+dge_res_both <- dge_res_cpn[,desired_cols] %>% full_join(dge_res_cth[, desired_cols], by=c("external_gene_name", "ensembl_gene_id"), suffix=c(".cpn", ".cth"))
+
+ggplot(dge_res_both, aes(log2FoldChange.cpn, log2FoldChange.cth)) + geom_point() + geom_abline()
+```
+```{r}
+load(file.path(file_path_ref$project_dir, file_path_ref$sequencing$results$cpn_gc_comparison))
+dge_res_cpn_gc <- gc_res
+load(file.path(file_path_ref$project_dir, file_path_ref$sequencing$results$cth_gc_comparison))
+dge_res_cth_gc <- gc_res
+
+
+gc_both_res <- cpn_gc_dge %>% inner_join(cth_gc_dge, by=c("ensembl_gene_id"), suffix=c(".cpn", ".cth"))
+
+ggplot(gc_both_res %>% subset(is_valid_gc.cpn & is_valid_gc.cth), 
+       aes(log2FoldChange.cpn, log2FoldChange.cth)) + 
+  geom_point()
+
+```
+
+Combine cpn gc and soma data
+```{r}
+cpn_dge_both <- dge_res_cpn_gc %>% inner_join(dge_res_cpn, by="ensembl_gene_id", suffix=c(".gc", ".soma")) %>% subset(is_valid_gc) %>%
+  rowwise() %>%
+  mutate(color_group=ifelse(ensembl_gene_id %in% gc_high_dpc23, 
+                            "Only GC High DPC23",
+                            ifelse(ensembl_gene_id %in% stage_dpc23,
+                                          "High Both DPC23", "Other")),
+         gc_group=ifelse(padj.gc < 0.1, ifelse(log2FoldChange.gc > 0, "GC_high", "GC_low"), "GC_ns"),
+         soma_group=ifelse(padj.soma < 0.1, ifelse(log2FoldChange.soma > 0, "Soma_high", "soma_low"), "Soma_ns")) %>%
+  rowwise() %>% 
+  mutate(color_group_2=paste(gc_group, soma_group, collapse="."))
+                                         
+
+ggplot(cpn_dge_both, aes(log2FoldChange.soma, log2FoldChange.gc, color=color_group_2)) + geom_point() + geom_abline() + geom_hline(yintercept=0) + geom_vline(xintercept=0)
+
+
+ggplot(cpn_dge_both, aes(log2FoldChange.soma, log2FoldChange.gc)) + geom_point() + geom_abline() + geom_hline(yintercept=0) + geom_vline(xintercept=0)
+```
+
+Rbms1 targets
+```{r}
+rbms1_irclip <- read_xlsx(file.path(file_path_ref$project_directory,
+                                    file_path_ref$external_data$rbms1_irclip), 
+                          sheet = "RBMS1 targets (irCLIP)",
+                          skip=1) %>%
+  separate_rows(`RefSeq ID`, sep=",")
+
+hsapiens_ensembl <- biomaRt::useEnsembl(biomart="ensembl",
+                                  dataset="hsapiens_gene_ensembl")
+
+rbms1_targets_ensembl <- getBM(c("refseq_mrna", "ensembl_gene_id"),
+      filters="refseq_mrna",
+      values=unique(rbms1_irclip$`RefSeq ID`),
+      mart=hsapiens_ensembl)
+
+rbms1_targets_mouse <- getBM(c("ensembl_gene_id", "mmusculus_homolog_ensembl_gene"),
+                             filters="ensembl_gene_id",
+                             values=unique(rbms1_targets_ensembl$ensembl_gene_id),
+                             mart=hsapiens_ensembl)
+
+rbms1_irclip <- rbms1_irclip %>% 
+  inner_join(rbms1_targets_ensembl, 
+             by=c("RefSeq ID" = "refseq_mrna")) %>%
+  inner_join(rbms1_targets_mouse)
+```
+
+```{r}
+cpn_dge_both <- data.frame(rbind(subset(dge_res_cpn_gc, is_valid_gc) %>%
+                                   dplyr::select(log2FoldChange, padj, ensembl_gene_id) %>%
+                                   rowwise() %>% mutate(compartment="GC"),
+                                  dge_res_cpn %>%
+                                   dplyr::select(log2FoldChange, padj, ensembl_gene_id) %>%
+                                   rowwise() %>% mutate(compartment="Soma"))) %>%
+  rowwise() %>% 
+  mutate(is_rbms1=ensembl_gene_id %in% unique(rbms1_irclip$mmusculus_homolog_ensembl_gene))
+
+
+ggplot(cpn_dge_both, aes(is_rbms1, log2FoldChange, fill=is_rbms1)) + 
+  geom_violin(draw_quantiles = 0.5) + 
+  facet_wrap(vars(compartment)) +
+  
+
+```

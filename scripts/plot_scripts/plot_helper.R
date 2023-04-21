@@ -8,7 +8,7 @@ library(ggupset)
 library(pheatmap)
 library(RColorBrewer)
 library(rjson)
-library(tidyr)
+
 
 # do the setup to get color definitions, etc
 input <- "C:/Users/prv892/Documents/GitHub/amalgam/metadata.json"
@@ -32,6 +32,11 @@ cthpn_color_dark <- cthpn_color_scale[4]
 accent_color_scale <- colorRampPalette(c("white", accent_color_dark, "black"))(5)
 accent_color_scale_light <- accent_color_scale[2]
 accent_color_scale_dark <- accent_color_scale[4]
+
+accent_color_go_scale <- colorRampPalette(c("black", "#af8dc3", "white"))(10)
+accent_color_go_light <- accent_color_go_scale[8]
+accent_color_go_dark <- accent_color_go_scale[4]
+
 
 # provide the PCA based on normalized counts
 # provide a data frame of rows as genes and columns as sample types
@@ -67,6 +72,19 @@ plot_goterm_dotplot <- function(goterm_subset, count_thresh=10, ncategory=10) {
     rowwise() %>%
     mutate(gene_ratio=gene_ratio_compute(GeneRatio),
            description=str_wrap(Description, width=20)) %>%
+    arrange(desc(Cluster), desc(gene_ratio))
+  
+  # get max number of categories
+  valid_categories <- goterm_df %>% 
+    group_by(Cluster) %>% 
+    summarise(categories_to_keep=paste(description[order(gene_ratio, decreasing=TRUE)][1:ncategory], 
+                                                                         collapse=";")) %>%
+    separate_rows(categories_to_keep, sep=";") %>%
+    dplyr::select(-Cluster) %>%
+    unique()
+  
+  goterm_df <- goterm_df %>% inner_join(valid_categories,
+                                        by=c("description" = "categories_to_keep")) %>%
     arrange(desc(Cluster), desc(gene_ratio))
   
   descrip_levels <- c()

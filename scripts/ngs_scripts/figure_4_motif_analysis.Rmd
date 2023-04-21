@@ -1,0 +1,340 @@
+---
+title: "figure_4_5_motif_analysis"
+author: "Priya Veeraraghavan"
+date: "2023-04-05"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warnings=FALSE)
+```
+
+```{r}
+input <- "C:/Users/prv892/Documents/GitHub/amalgam/metadata.json"
+
+library(biomaRt)
+library(rjson)
+library(seqinr)
+
+file_path_ref <- fromJSON(file = input)
+source(file.path(file_path_ref$project_directory, file_path_ref$sequencing$setup_script))
+source(file.path(file_path_ref$project_directory, file_path_ref$plots$setup_script))
+```
+
+
+```{r}
+get_utrs <- function() {
+  
+  load(file.path(file_path_ref$project_directory,
+                 file_path_ref$sequencing$results$gc_vs_gcf_utr_comparison))
+  
+  # get utr sequences
+utr_sequences <- getBM(c("3utr", "ensembl_transcript_id"),
+                       filters="ensembl_transcript_id",
+                       values=unique(gc_res_for_transite$longest_txpt),
+                       mart=grcm38_101)
+utr_sequences_valid <- subset(utr_sequences, !grepl("N", `3utr`))
+utr_lst <- utr_sequences_valid$`3utr`
+names(utr_lst) <- utr_sequences_valid$ensembl_transcript_id
+print(length(utr_lst))
+
+# takes a vector of utr sequences and writes a fasta
+write_utr_fasta <- function(utr_seq_vec, fasta_out) {
+  utr_seq_vec_valid <- utr_seq_vec[sapply(utr_seq_vec, function(x) nchar(x) > 10)]
+  utr_seq_lst <- lapply(utr_seq_vec_valid, function(x) strsplit(gsub("T", "U", x), "")[[1]])
+  print(length(utr_seq_lst))
+  write.fasta(utr_seq_lst, names(utr_seq_vec), fasta_out, nbchar=50000)
+}
+
+for (subtype in c("P1_CPN", "P3_CPN", "P3_CTh")) {
+  for (loc in c("GC", "Soma")) {
+  if (grepl("GC", loc)) {
+    txpts <- subset(gc_res_for_transite, gene_group == sprintf("%s_GC", subtype))$longest_txpt
+  } else {
+    txpts <- subset(gc_res_for_transite, grepl(subtype, gene_group))$longest_txpt
+  }
+  
+  print(subtype)
+  print(length(txpts))
+  valid_utrs <- na.omit(utr_lst[txpts])
+  print(length(valid_utrs))
+  write_utr_fasta(valid_utrs, file.path(file_path_ref$project_directory,
+                                        sprintf("data/sequencing/differential_expression/%s_%s_3utr.fa", subtype, loc)))
+  }
+}
+
+save(utr_lst, gc_res_for_transite,  file=file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$gc_vs_soma_utr_info))
+
+}
+
+get_utrs()
+
+```
+
+On the cluster, load and run transite
+```{}
+library(transite)
+load("dpc23_cpn_cth_gc_vs_soma_utr_info.RData")
+
+print("Loaded data")
+cpn_soma_txpt <- subset(dpc23_gc_res, gene_group %in% c("P3_CPN_Soma", "P3_CPN_GC"))$longest_txpt
+cth_soma_txpt <- subset(dpc23_gc_res, gene_group %in% c("P3_CTh_Soma", "P3_CTh_GC"))$longest_txpt
+cpn_gc_txpt   <- subset(dpc23_gc_res, gene_group == "P3_CPN_GC")$longest_txpt
+cth_gc_txpt   <- subset(dpc23_gc_res, gene_group == "P3_CTh_GC")$longest_txpt
+
+print("Now calculating soma scores")
+cpn_soma_utr_scores <- transite::score_transcripts(na.omit(utr_lst[cpn_soma_txpt]), n_cores=10, cache=FALSE)
+print("Calculated CPN soma scores")
+cth_soma_utr_scores <- transite::score_transcripts(na.omit(utr_lst[cth_soma_txpt]), n_cores=10, cache=FALSE)
+print("Calculated Cth soma scores")
+
+cpn_gc_utr_scores <- transite::score_transcripts(na.omit(utr_lst[cpn_gc_txpt]), n_cores=10, cache=FALSE)
+print("Calculated CPN gc scores")
+cth_gc_utr_scores <- transite::score_transcripts(na.omit(utr_lst[cth_gc_txpt]), n_cores=10, cache=FALSE)
+print("Calculated CTh GC scores")
+
+print("Calculated all scores")
+
+save(cpn_soma_utr_scores, cpn_gc_utr_scores, cth_soma_utr_scores, cth_gc_utr_scores, file="dpc23_gc_comparison.TSMA_results.RData")    
+
+print("Now calculating enrichment for CPN")
+cpn_utr_enrichment <- transite::calculate_motif_enrichment(cpn_gc_utr_scores$df, cpn_soma_utr_scores$df, cpn_soma_utr_scores$total_sites, cpn_soma_utr_scores$absolute_hits, length(cpn_gc_txpt))
+
+print("Now calculating enrichment CThPN")
+cth_utr_enrichment <- transite::calculate_motif_enrichment(cth_gc_utr_scores$df, cth_soma_utr_scores$df, cth_soma_utr_scores$total_sites, cth_soma_utr_scores$absolute_hits, length(cth_gc_txpt))
+
+print("saving results")
+save(cpn_soma_utr_scores, cpn_gc_utr_scores, cth_soma_utr_scores, cth_gc_utr_scores, cpn_utr_enrichment,  cth_utr_enrichment, file="dpc23_gc_comparison_noShared.TSMA_results.RData")
+
+print("Done.")
+
+
+```
+
+
+############################## END ##############################################
+# Stage Comparisons: for Figure 5
+
+
+```{r}
+dpc21_cpn_res <- calc_gc_vs_bkg_last250("DPC21", "CPN", "Forebrain_Background", cpn_valid_txpts) %>%
+  subset(!is.na(padj))
+dpc21_cpn_res$stype <- "P1_CPN_GC"
+
+cpn_res <- rbind(dpc21_cpn_res, dpc23_cpn_res) 
+#save(cpn_gc_res, file=file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$cpn_stage_utr_analysis))
+
+cpn_res_grouped <- cpn_res %>%
+  drop_na() %>%
+  group_by(Geneid_first, longest_txpt, utr_length_longest) %>%
+  summarize(expression_group=paste(stype[is_sig], collapse=";")) %>%
+  rowwise() %>%
+  mutate(expression_group_readable=ifelse(nchar(expression_group) == 0, "Soma",
+                                          ifelse(grepl(";", expression_group), "Shared_GC",
+                                                 expression_group)))
+cpn_res_grouped$expression_group_readable <- factor(cpn_res_grouped$expression_group_readable,
+                                                    levels=c("Soma", "P1_CPN_GC", "Shared_GC", "P3_CPN_GC"))
+
+# intersect to only get the genes higher in GCs
+
+
+mean_comparisons <- list(c("Soma", "P1_CPN_GC"), c("P1_CPN_GC", "Shared_GC"), c("Shared_GC", "P3_CPN_GC"))
+
+plt <- ggplot(cpn_res_grouped, aes(expression_group_readable, utr_length_longest, 
+                                   fill=expression_group_readable)) + 
+  geom_violin(draw_quantiles = 0.5) + 
+  theme_classic() + 
+  xlab("") +
+  ylab("3'UTR Length") +
+  ggtitle("UTR Lengths Across Time\nCPN GCs") +
+  scale_fill_manual(values=c(background_color,
+                             colorRampPalette(c(cpn_color_light, cpn_color_dark))(3))) +
+  theme(legend.position="None", text=element_text(size=7)) +
+  stat_compare_means(method = "anova", label.y=5.5, size=3)+
+  stat_compare_means(aes(label=after_stat(p.signif)), comparisons=mean_comparisons, method="wilcox.test") +
+  scale_y_log10()
+
+save(cpn_res_grouped, utr_lst, file=file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$cpn_gc_stage_utr_info))
+
+```
+```{}
+library(transite)
+load("cpn_stage_utr_info.RData")
+
+print("Loaded data")
+p1_gc_txpt <- unique(subset(cpn_res_grouped, expression_group_readable=="P1_CPN_GC")$longest_txpt)
+
+shared_gc_txpt <- unique(subset(cpn_res_grouped, expression_group_readable=="Shared_GC")$longest_txpt)
+
+p3_gc_txpt <- unique(subset(cpn_res_grouped, expression_group_readable=="P3_CPN_GC")$longest_txpt)
+
+bkg_gc_txpt <-  unique(subset(cpn_res_grouped, grepl("GC", expression_group_readable))$longest_txpt)
+
+
+print("Now calculating background gc scores")
+bkg_gc_utr_scores <- transite::score_transcripts(na.omit(utr_lst[bkg_gc_txpt]), n_cores=10, cache=FALSE)
+print("Calculated background gc scores")
+
+p1_gc_utr_scores <- transite::score_transcripts(na.omit(utr_lst[p1_gc_txpt]), n_cores=10, cache=FALSE)
+print("Calculated p1 gc scores")
+
+shared_gc_utr_scores <- transite::score_transcripts(na.omit(utr_lst[shared_gc_txpt]), n_cores=10, cache=FALSE)
+print("Calculated shared gc scores")
+
+p3_gc_utr_scores <- transite::score_transcripts(na.omit(utr_lst[p3_gc_txpt]), n_cores=10, cache=FALSE)
+print("Calculated p3 gc scores")
+
+print("Calculated all scores")
+
+save(bkg_gc_utr_scores, p1_gc_utr_scores, shared_gc_utr_scores, p3_gc_utr_scores, file="cpn_stage_utr_comparison.TSMA_results.RData")    
+
+print("Now calculating enrichment for P1")
+p1_utr_enrichment <- transite::calculate_motif_enrichment(
+p1_gc_utr_scores$df, 
+bkg_gc_utr_scores$df, 
+bkg_gc_utr_scores$total_sites,
+bkg_gc_utr_scores$absolute_hits, 
+length(p1_gc_txpt))
+
+print("Now calculating enrichment for Shared")
+shared_utr_enrichment <- transite::calculate_motif_enrichment(
+shared_gc_utr_scores$df, 
+bkg_gc_utr_scores$df, 
+bkg_gc_utr_scores$total_sites,
+bkg_gc_utr_scores$absolute_hits, 
+length(shared_gc_txpt))
+
+
+print("Now calculating enrichment for P3")
+p3_utr_enrichment <- transite::calculate_motif_enrichment(
+p3_gc_utr_scores$df, 
+bkg_gc_utr_scores$df, 
+bkg_gc_utr_scores$total_sites,
+bkg_gc_utr_scores$absolute_hits, 
+length(p3_gc_txpt))
+
+print("saving results")
+save(bkg_gc_utr_scores, p1_gc_utr_scores, shared_gc_utr_scores, p3_gc_utr_scores,
+p1_utr_enrichment, shared_utr_enrichment, p3_utr_enrichment,
+file="cpn_stage_utr_comparison.TSMA_results.RData")
+
+print("Done.")
+
+
+```
+
+Look at rbms1 go
+```{r}
+utr_genes_cpn <- all_sites %>% inner_join(t2g_protein)
+all_utr_genes_cpn <- 
+rbms1_genetype_enrich <- enrichGO(unique(subset(utr_genes_cpn, num_sites_called > 0)$ensembl_gene_id),
+         ont="ALL", keyType="ENSEMBL", OrgDb = org.Mm.eg.db, universe=cpn_soma_agg$) unique(utr_genes_cpn$ensembl_gene_id))
+
+rbms1_genetype_enrich_grouped <- compareCluster(list(nsite1=unique(subset(utr_genes_cpn, num_sites_called == 1)$ensembl_gene_id),
+                                               nsite2=unique(subset(utr_genes_cpn, num_sites_called == 2)$ensembl_gene_id),
+                                               nsite3=unique(subset(utr_genes_cpn, num_sites_called == 3)$ensembl_gene_id),
+                                               nsite4=unique(subset(utr_genes_cpn, num_sites_called == 4)$ensembl_gene_id),
+                                               nsite5=unique(subset(utr_genes_cpn, num_sites_called == 5)$ensembl_gene_id)),
+         ont="ALL", keyType="ENSEMBL", OrgDb = org.Mm.eg.db, universe=unique(utr_genes_cpn$ensembl_gene_id))
+
+rbms1_genetype_enrich_grouped_stage <- compareCluster(list(p1=unique(subset(utr_genes_cpn, num_sites_called >0 & grepl("P1", gene_group))$ensembl_gene_id),
+                                                           p3=unique(subset(utr_genes_cpn, num_sites_called >0 & grepl("P3", gene_group))$ensembl_gene_id),
+                                                           shared=unique(subset(utr_genes_cpn, num_sites_called >0 & grepl("Shared", gene_group))$ensembl_gene_id)),
+         ont="ALL", keyType="ENSEMBL", OrgDb = org.Mm.eg.db, universe=unique(utr_genes_cpn$ensembl_gene_id))
+
+```
+
+```{r}
+# define gene sets
+first_geneid_to_longest <- function(txpt_list) {
+  return(unique(subset(txpt_longest, Geneid_first %in% txpt_list)$longest_txpt))
+}
+# for comparison of subtype
+bkg_both_soma_txpts <- unique(
+  union(
+    subset(cpn_soma_agg, is_valid)$longest_txpt,
+    subset(cth_soma_agg, is_valid)$longest_txpt))
+
+cpn_gc_dpc23_subtype_enriched_txpts <- unique(subset(dpc23_gc_res_grouped, 
+                                                     grepl("P3_CPN_GC", expression_group))$longest_txpt)
+
+cth_gc_dpc23_subtype_enriched_txpts <- unique(subset(dpc23_gc_res_grouped, 
+                                                     grepl("P3_CTh_GC", expression_group))$longest_txpt)
+
+save(bkg_both_soma_txpts, cpn_gc_dpc23_subtype_enriched_txpts, 
+     cth_gc_dpc23_subtype_enriched_txpts,
+     file=file.path(file_path_ref$project_directory, "data/sequencing/differential_expression/dpc23_gc_comparison_txpts_to_compare.RData"))
+```
+
+
+```{r}
+# get cpn stage
+# for comparison of stage
+bkg_cpn_soma_txpts <- first_geneid_to_longest(unique(
+    subset(cpn_soma_agg, is_valid)$Geneid_first)
+)
+
+
+cpn_gc_dpc23_stage_enriched_txpts <- first_geneid_to_longest(
+  unique(subset(cpn_res_grouped, 
+                expression_group_readable == "P3_CPN_GC")$Geneid_first)
+)
+cpn_gc_shared_stage_enriched_txpts <- first_geneid_to_longest(
+  unique(subset(cpn_res_grouped,
+                expression_group_readable == "Shared_GC")$Geneid_first)
+)
+cpn_gc_dpc21_stage_enriched_txpts <- first_geneid_to_longest(
+  unique(subset(cpn_res_grouped, 
+                expression_group_readable == "P1_CPN_GC")$Geneid_first))
+
+save(bkg_cpn_soma_txpts, cpn_gc_dpc23_stage_enriched_txpts, 
+     cpn_gc_shared_stage_enriched_txpts, cpn_gc_dpc21_stage_enriched_txpts,
+     file=file.path(file_path_ref$project_directory, "data/sequencing/differential_expression/cpn_gc_stage_comparison_txpts_to_compare.RData"))
+
+# get utr sequences
+utr_sequences <- getBM(c("3utr", "ensembl_transcript_id"),
+                       filters="ensembl_transcript_id",
+                       values=unique(bkg_both_soma_txpts),
+                       mart=grcm38_101)
+utr_sequences_valid <- subset(utr_sequences, !grepl("N", `3utr`))
+utr_lst <- as.list(utr_sequences_valid$`3utr`)
+names(utr_lst) <- utr_sequences_valid$ensembl_transcript_id
+save(utr_lst, file=file.path(file_path_ref$project_directory, "data/external_data/utr3_sequences.RData"))
+
+library(transite)
+
+combine_pvals_motifs <- function(enrichment_df) {
+  
+  enrichment_df_grouped <-
+    enrichment_df %>% separate_rows(motif_rbps, sep=",") %>%
+    rowwise() %>%
+    mutate(motif_rbps=gsub(" ", "", motif_rbps)) %>%
+    group_by(motif_rbps) %>%
+    summarize(mean_enrichment=mean(enrichment),
+              p_combined=p_combine(p_value)$p_value)
+  
+  enrichment_df_grouped$padj <- p.adjust(enrichment_df_grouped$p_combined, method="fdr")
+
+  
+
+  return(enrichment_df_grouped)
+  
+}
+
+paralog_groups <- 
+plot_soma_vs_gc_motif_enrich <- function() {
+  load(file.path(file_path_ref$project_directory, "data/sequencing/differential_expression/dpc23_gc_comparison.TSMA_results.RData"))
+  
+  enrichment_df <- data.frame(do.call(rbind,
+                                      list(combine_pvals_motifs(cpn_utr_enrichment) %>% 
+                                             rowwise() %>% 
+                                             mutate(stype="P3_CPN_GC"),
+                                           combine_pvals_motifs(shared_utr_enrichment) %>% 
+                                             rowwise() %>% 
+                                             mutate(stype="P3_Shared_GC"),
+                                           combine_pvals_motifs(cth_utr_enrichment) %>% 
+                                             rowwise() %>% 
+                                             mutate(stype="P3_CTh_GC"))))
+  
+}
+

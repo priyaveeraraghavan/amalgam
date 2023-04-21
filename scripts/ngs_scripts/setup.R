@@ -15,7 +15,6 @@ library(ggpubr)
 library(ggrepel)
 library(knitr)
 library(gridExtra)
-library(ggExtra)
 library(stringr)
 library(ggupset)
 library(ggrastr)
@@ -34,12 +33,14 @@ project_dir <- file_path_ref$project_directory
 
 ## Default Imports
 # get the pre-downloaded transcript to gene map or retrieve it from ensembl
+grcm38_101 <- biomaRt::useEnsembl(biomart="ensembl", version=101, 
+                                  dataset="mmusculus_gene_ensembl")
+                                  
 t2g_file <- file.path(project_dir, 
                       "data/external_data/ensembl_GRCm38_101_gene_biotypes.RData")
 
 if (!file.exists(t2g_file)) {
-grcm38_101 <- biomaRt::useEnsembl(biomart="ensembl", version=101, 
-                                  dataset="mmusculus_gene_ensembl")
+
 
 t2g <- biomaRt::getBM(c("ensembl_transcript_id", 
                                   "ensembl_gene_id", 

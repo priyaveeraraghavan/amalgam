@@ -115,11 +115,13 @@ plot_main_2b <- function(plot_savefile) {
                                              suffix=c(".gc", ".soma"))
   
   
-  plt <- rasterize(ggplot(res_toplot, aes(log2FoldChange.soma, 
-                                          log2FoldChange.gc, 
+  plt <- rasterize(ggplot(res_toplot, aes(log2FoldChange.gc, 
+                                          log2FoldChange.soma, 
                                           color=gc_subtype, 
                                           shape=soma_subtype)) + 
                      geom_point(size=0.5) + 
+                     geom_vline(xintercept=0, linetype="dashed", linewidth=0.5, color=background_color_dark) + 
+                     geom_hline(yintercept=0, linetype="dashed", linewidth=0.5, color=background_color_dark) +
                      scale_color_manual(values=c(cpn_color, cthpn_color, background_color)) +
                      theme_classic() +
                      theme(legend.position="None",

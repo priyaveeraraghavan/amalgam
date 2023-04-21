@@ -12,7 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 
 #### perform DGE
-library(tidyr)
+#library(ggpubr)
 library(ggplot2)
 library(dplyr)
 library(tximport)
@@ -23,11 +23,10 @@ library(RColorBrewer)
 library(clusterProfiler)
 library(org.Mm.eg.db)
 library(oneclust) # colorblind palette
-library(ggpubr)
 library(ggrepel)
 library(knitr)
 library(gridExtra)
-library(ggExtra)
+#library(ggExtra)
 library(stringr)
 library(ggupset)
 library(ggrastr)
@@ -38,8 +37,7 @@ library(xlsx)
 library(vsn)
 ```
 
-# args = commandArgs(trailingOnly=TRUE)
-# input <- args[1]
+
 ```{r}
 input <- "C:/Users/prv892/Documents/GitHub/amalgam/metadata.json"
 
@@ -55,6 +53,9 @@ dir.create(file.path(file_path_ref$project_directory,
            recursive=TRUE)
 
 ## Files created from this script
+
+all_samples_file <- file.path(file_path_ref$project_directory,
+                              file_path_ref$sequencing$results$counts_gene_level)
 
 all_soma_file <- file.path(file_path_ref$project_directory, 
                            file_path_ref$sequencing$results$all_soma_comparison)
@@ -232,6 +233,25 @@ name_gc_vs_gcf <- function(stype, loc, dev_stage, bkg) {
 }
 
 ```
+# All samples
+```{r}
+compare_all_samples <- function(robj_savefile) {
+  
+  tpm_thresh <- 2
+
+  txi <- import_files_bygene(metadata)
+  
+  cpm_data <- data.frame(txi$abundance)
+  
+  cpm_data$ensembl_gene_id <- rownames(cpm_data)
+ 
+  save(cpm_data, file=robj_savefile)
+}
+
+compare_all_samples(all_samples_file)
+```
+
+
 
 # Soma
 ## All Soma: Counts Filtration, Global Metrics
@@ -1384,20 +1404,20 @@ pairwise_gc_comparison_stage <- function(all_soma_file,
   
   gene_universe <- ifelse(subtype_to_compare == "CPN", 
                           cpn_soma_valid_genes, cth_soma_valid_genes)
-  go_enrichment <- setReadable(compareCluster(list(P1_gc=early_gc, P3_gc=late_gc), 
+  go_enrichment <- compareCluster(list(P1_gc=early_gc, P3_gc=late_gc), 
                                                OrgDb = org.Mm.eg.db,
                                                ont = "ALL", keyType="ENSEMBL",
-                                               universe=gene_universe), 
-                                OrgDb = org.Mm.eg.db, keyType="ENSEMBL")
+                                               universe=gene_universe)
   
-  plot(dotplot(go_enrichment))
+  #plot(dotplot(go_enrichment))
   
   # save csv files
   csv_dge_savefile <- gsub(".RData", "_DGE.csv", robj_savefile)
   write.csv(gc_res, file=csv_dge_savefile)
   
-  csv_go_savefile <- gsub(".RData", "_GO.csv", robj_savefile)
-  write.csv(go_enrichment@compareClusterResult, file=csv_go_savefile)
+  
+  #csv_go_savefile <- gsub(".RData", "_GO.csv", robj_savefile)
+  #write.csv(go_enrichment@compareClusterResult, file=csv_go_savefile)
   
   
   save(dds_gc, gc_res, go_enrichment, file=robj_savefile)
@@ -1426,451 +1446,620 @@ pairwise_gc_comparison_stage(all_soma_file,
 
 ```
 
+## ISOFORM-LEVEL DIFFERENCES
+Compare 3'UTRs of genes based just on reads in the last 250bp, as there is 3' bias in the data.
 
+```{r}
+generate_last250_coordinates <- function() {
+last250_coordinate_file <- file.path(file_path_ref$project_dir, file_path_ref$external_data$last250_coordinates)
 
-                  file.path(file_path_ref$project_directory,
-                            file_path_ref$sequencing$results$dpc23_gcs_comparison),
-                  excel_dge,
-                  excel_go)
-
-
-
-compare_dpc23_cpn_dpc21_cth(
-  all_soma_file,
-  soma_filter_gc_genes_file,
-  gc_vs_gcf_comparison_file,
-  gcf_comparison_file,
-  file.path(file_path_ref$project_directory,
-            file_path_ref$sequencing$results$dpc3_cpn_dpc21_cth_comparison),
-  excel_dge,
-  excel_go)
-
-# compares GC gene abundances directly
-# subsets to include only genes for which GCF is constant
-# or for which CPN GCs are higher despite thalamus GCF high
-# or CThPN GCs are higher despite forebrain GCF high
-compare_dpc23_gcs <- function(
-    soma_filter_gc_genes_file,
-    gc_vs_gcf_file, 
-  gcf_vs_gcf_file, 
-                              robj_savefile) {
+if (file.exists(last250_coordinate_file)) {
+  load(last250_coordinate_file)
   
-  print(soma_filter_gc_genes_file)
-  print(gc_vs_gcf_file)
-  print(gcf_vs_gcf_file)
-  
-  print(robj_savefile)
-  
-  pdf_savefile <- gsub(".RData", ".pdf", robj_savefile)
-  pdf(pdf_savefile)
-  
-  
-  load(soma_filter_gc_genes_file)
-  metadata_subset <- subset(metadata, location == "GC" & stage == "DPC23")
-  
-  print(subset(
-    above_noise_soma_express_gc_genes,
-    sample_type %in% c("CPN_GC_DPC23", 
-                       "CThPN_GC_DPC23")))
-  
-  dds_gc <- run_deseq2_gene(metadata_subset,
-                            "~subtype",
-                            data_dir=salmon_dir,
-                            txpt2gene = t2g_protein[,c("target_id", "ensembl_gene_id")],
-                            gene_subset=unique(subset(
-                              above_noise_soma_express_gc_genes,
-                              sample_type %in% c("CPN_GC_DPC23", 
-                                                 "CThPN_GC_DPC23")
-                              )$ensembl_gene_id))
-  
-  res_gc <- row2col_ensgene(results(dds_gc, name="subtype_CThPN_vs_CPN")) %>%
-    rowwise() %>%
-    mutate(is_cth_subtype_gc=padj < 0.05 & log2FoldChange > 0,
-           is_cpn_subtype_gc=padj < 0.05 & log2FoldChange < 0) %>%
-    inner_join(ens2ext)
-  
-  
-  base_volcano <- ggplot(res_gc, aes(log2FoldChange, -log10(padj))) + 
-    geom_point(color=background_color) +
-    geom_hline(yintercept = -log10(0.05)) +
-    xlim(-5,5)
-  
-  print(rasterize(base_volcano, dpi=300))
-  
-  print("augment with info about GC enriched above input")
-  load(gc_vs_gcf_file)
-  res_gc <- res_gc %>%
-    rowwise() %>%
-    mutate(is_cpn_over_input=ensembl_gene_id %in% gc_enrich_genes$CPN_GC_DPC23,
-           is_cth_over_input=ensembl_gene_id %in% gc_enrich_genes$CThPN_GC_DPC23)
-  
-  print(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_cpn_over_input),
-                                  mapping=aes(log2FoldChange, -log10(padj)),
-                                  color=cpn_color),
-                  dpi=300) +
-          ggtitle("GCs DPC23 DGE Colored by CPN GC Enriched"))
-  
-  print(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_cth_over_input),
-                                  mapping=aes(log2FoldChange, -log10(padj)),
-                                  color=cthpn_color),
-                  dpi=300) +
-          ggtitle("GCs DPC23 DGE Colored by CThPN GC Enriched"))
-  
-  print(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_cth_over_input | is_cpn_over_input),
-                                  mapping=aes(log2FoldChange, -log10(padj)),
-                                  color=accent_color_dark), 
-                  dpi=300)+
-          ggtitle("GCs DPC23 DGE Colored by GC Enriched"))
-  
-  print("augment with info about different in GCFs")
-  load(gcf_vs_gcf_file)
+} else {
+  # create ensembl biomart instance 
+ grcm38_101 <- biomaRt::useEnsembl(biomart="ensembl", version=101, 
+                                  dataset="mmusculus_gene_ensembl")
+ coords <- getBM(c("ensembl_gene_id", "ensembl_transcript_id",
+                   "chromosome_name", "strand",
+                   "3_utr_start", "3_utr_end"),
+                 filters="ensembl_gene_id",
+                 values=valid_genes,
+                 mart=grcm38_101)
  
-  print(thalamus_gcf_genes)
+ coords_nona <- coords %>%
+   subset(!is.na(`3_utr_start`) & !is.na(`3_utr_end`)) 
+ 
+
+ # tested on get_last250(coords_nona, "ENSMUST00000000572") long last exon
+ # can't use granges resize because this just auto adds more transcript real estate even if outside utr
+ get_last250 <- function(coords_df, transcript_id) {
+   
+   txpt_df <- subset(coords_df, ensembl_transcript_id == transcript_id) 
+   
+   num_exons <- nrow(txpt_df)
+   direction <- txpt_df$strand[1]
+
+   
+   if (num_exons == 1) {
+     utr3_start <- txpt_df$`3_utr_start`[1]
+     utr3_end <- txpt_df$`3_utr_end`[1]
+
+     
+     if (direction == 1) {
+       start_end <- data.frame(start=max(utr3_start, utr3_end-250),
+                               end=utr3_end,
+                               rank=1,
+                               strand=direction) %>%
+         rowwise() %>%
+         mutate(exon_length=abs(start-end))
+       
+     } else {
+       start_end <- data.frame(start=utr3_start, 
+                               end=min(utr3_end, utr3_start+250),
+                               rank=1,
+                               strand=direction
+                               ) %>%
+         rowwise() %>%
+         mutate(exon_length=abs(start-end))
+     }
+   } else {
+      
+     exon_df <- txpt_df %>% dplyr::rename(start=`3_utr_start`,
+                                          end=`3_utr_end`) %>%
+       rowwise() %>%
+       mutate(exon_length=abs(start-end)) %>%
+       dplyr::select(-c(chromosome_name, ensembl_gene_id, ensembl_transcript_id))
+
+     if (direction ==1) {
+       exon_df_ordered <- exon_df %>% arrange(desc(start)) 
+     } else {
+       
+       exon_df_ordered <- exon_df %>% arrange(start)
+     }
+       exon_df_ordered$rank <- 1:nrow(exon_df_ordered)
+
+       
+       total_coverage <- sapply(1:nrow(exon_df_ordered), 
+                                function(i) sum(exon_df_ordered$exon_length[1:i]))
+
+       whole_exons_include <- which(total_coverage < 250)
+       if (length(whole_exons_include) == 0) {
+         # case when last exon is geq 250
+         last_exon <- 1
+         start_end <- data.frame(start=integer(0),
+                                 end=integer(0),
+                                 rank=integer(0),
+                                 strand=integer(0),
+                                 exon_length=integer(0))
+         bp_include_last_exon <- 250
+         
+       } else {
+         last_exon <- max(whole_exons_include) + 1
+         start_end <- exon_df_ordered[1:max(whole_exons_include),]
+         bp_include_last_exon <- 250-total_coverage[max(whole_exons_include)]
+
+
+       }
+       
+       
+       if (nrow(exon_df_ordered) >= last_exon) {
+       
+         if (direction == 1) {
+           last_exon_start= max(exon_df_ordered$start[last_exon], 
+                              exon_df_ordered$end[last_exon]-bp_include_last_exon)
+           last_exon_end = exon_df_ordered$end[last_exon]
+         } else {
+           last_exon_start = exon_df_ordered$start[last_exon]
+           last_exon_end = min(exon_df_ordered$end[last_exon],
+                             exon_df_ordered$start[last_exon]+bp_include_last_exon)
+        
+         }
+         
+         start_end <- data.frame(rbind(start_end, 
+                                       data.frame(start=last_exon_start,
+                                                end=last_exon_end,
+                                                rank=last_exon,
+                                                strand=direction) %>%
+                                       rowwise() %>%
+                                       mutate(exon_length=abs(start-end))))
+       }
+      
+
+   }
+   
+   start_end$ensembl_gene_id <- txpt_df$ensembl_gene_id[1]
+   start_end$ensembl_transcript_id <- txpt_df$ensembl_transcript_id[1]
+   start_end$chromosome_name <- txpt_df$chromosome_name[1]
+   
+   return(start_end)
+ }
+ 
+ coords_last250 <- lapply(unique(coords_nona$ensembl_transcript_id),
+                                             function(txid) get_last250(coords_nona, txid))
+ 
+ coords_last250_df <- data.frame(do.call(rbind, coords_last250))
+
+ coords_last250_granges <- coords_last250_df %>%
+   group_by(ensembl_gene_id, ensembl_transcript_id) %>%
+   summarize(txpt_ranges=list(GRanges(seqnames=Rle(as.character(chromosome_name)), 
+                                      strand=Rle(strand(ifelse(strand > 0, "+", "-"))), 
+                                      ranges=IRanges(start, end))))
+ 
+ save(coords_last250_granges, file=file.path(file_path_ref$project_directory$last250_coordinates))
+ 
+ # collapse overlapping transcripts
+ collapse_gene <- function(gene_utrs_df) {
+
+   all_combos <- expand.grid(gene_utrs_df$ensembl_transcript_id, 
+                             gene_utrs_df$ensembl_transcript_id) %>%
+   dplyr::rename(from=Var1, 
+                to=Var2) %>%
+     rowwise() %>%
+     mutate(is_overlap=length(findOverlaps(subset(gene_utrs_df, ensembl_transcript_id == from)$txpt_ranges[[1]],
+                                    subset(gene_utrs_df, ensembl_transcript_id == to)$txpt_ranges[[1]])) > 0) 
+   
+   overlap_combos <- data.frame(all_combos %>%
+                                  subset(is_overlap))
+   
+   # get connected components
+   comps <- components(graph_from_data_frame(overlap_combos))
+   comp_groups <- groups(comps)
+   
+   # use connected components named by transcript id to grab the iranges
+   # Genomic ranges for some reason does not support lapply etc
+   group_names <- c()
+   group_ranges <- c()
+   for (i in comp_groups) {
+     group_names <-  c(group_names, paste(i, collapse=";"))
+     comp_ranges <- NULL
+     # iter through txpts
+     for (j in i) {
+       if (is.null(comp_ranges)) {
+         comp_ranges <- 
+           subset(gene_utrs_df, ensembl_transcript_id == j)$txpt_ranges[[1]]
+       } else {
+       comp_ranges <- GenomicRanges::reduce(c(comp_ranges,
+                        subset(gene_utrs_df, ensembl_transcript_id == j)$txpt_ranges[[1]]))
+     }
+     }
+      group_ranges <- c(group_ranges, comp_ranges)
+
+   }
+
+   group_ranges_collapsed_df <- data.frame(
+     do.call(rbind,
+             lapply(1:length(group_ranges), 
+                    function(x) data.frame(group_ranges[x]) %>%
+                      rowwise() %>% mutate(ensembl_transcript_id=group_names[x])))
+   )
+
+   # add chromosome and gene info
+   group_ranges_collapsed_df$chromosome_name <- group_ranges_collapsed_df$seqnames
+   group_ranges_collapsed_df$seqnames <- NULL
+   group_ranges_collapsed_df$ensembl_gene_id <- gene_utrs_df$ensembl_gene_id[1]
+   #group_ranges_collapsed_df$strand <- gene_utrs_df$strand[1]
+
+
+   
+   return(group_ranges_collapsed_df)
+ 
+     
+ }
+ 
+
+ 
+ coords_last250_df_collapse <- lapply(unique(coords_last250_granges$ensembl_gene_id),
+                                                         function(g) collapse_gene(subset(coords_last250_granges, ensembl_gene_id == g)))
+   
+ coords_last250_collapsed_df <- data.frame(do.call(rbind, coords_last250_df_collapse))
   
-  res_gc <- res_gc %>%
+ ### AUGMENT WITH ONE TXPT per GROUP
+ # get info about longest txpt for a gene group
+coords_last250_collapsed_df$Geneid_first <- sapply(coords_last250_collapsed_df$ensembl_transcript_id, 
+                                                   function(x) strsplit(as.character(x), ";")[[1]][1])
+
+txpts_expanded <- coords_last250_collapsed_df %>%
+  separate_rows(ensembl_transcript_id, sep=";")
+txpt_utr_lengths <- getBM(c("ensembl_transcript_id", "chromosome_name", "strand", "3_utr_start", "3_utr_end"),
+                          filters="ensembl_transcript_id",
+                          values=unique(txpts_expanded$ensembl_transcript_id),
+                          mart=grcm38_101) %>%
+  drop_na() %>% # required because they always for some reason return NA
+  group_by(ensembl_transcript_id) %>%
+  summarize(utr_length=sum(abs(`3_utr_end`-`3_utr_start`)),
+            utr_coords=paste(sprintf("%s:%s-%s:%s", chromosome_name, `3_utr_start`, `3_utr_end`, ifelse(strand < 0, "-", "+")), collapse=";"))
+
+# retain the longest or one of the longest if multiple are same length
+txpt_longest <- txpts_expanded %>% 
+  full_join(txpt_utr_lengths, by="ensembl_transcript_id") %>%
+  group_by(Geneid_first) %>%
+  summarize(longest_txpt=ensembl_transcript_id[which.max(utr_length)[1]],
+            utr_length_longest=utr_length[which.max(utr_length)[1]],
+            utr_coords_longest=utr_coords[which.max(utr_length)[1]]) %>%
+  inner_join(t2g_protein, by=c("longest_txpt" = "ensembl_transcript_id"))
+
+coords_last250_collapsed_df <- coords_last250_collapsed_df %>% 
+  full_join(txpt_longest, by=c("Geneid_first", "ensembl_gene_id"))
+
+# now save to file
+ save(coords_last250_df, coords_last250_collapsed_df, file=file.path(file_path_ref$project_directory, 
+                                                                     file_path_ref$external_data$last250_coordinates))
+ 
+# write GTF for featureCounts
+ coords_last250_collapsed_gtf <- coords_last250_collapsed_df %>%
+   rowwise() %>%
+   mutate(source="GRCm38_101_last250_utrs", 
+          feature="utr",
+          frame=".",
+          attribute=paste0(c(sprintf('gene_id "%s"', ensembl_gene_id),
+                          sprintf(' transcript_id "%s"', gsub(";", ":",ensembl_transcript_id))), collapse=";"))
+ 
+ write.table(coords_last250_collapsed_gtf[,c("chromosome_name", "source", "feature", "start", "end", "width", "strand", "frame", "attribute")], sep="\t", quote=FALSE, row.names=FALSE, col.names=FALSE, file=file.path(file_path_ref$project_directory, "data/external_data/GRCm38_101_last250bp_collapse.gtf"))
+}
+
+}
+generate_last250_coordinates()
+```
+
+
+
+```{}
+# run featureCounts on cluster using GTF
+```
+
+```{r}
+read_format_last250_counts <- function() {
+read_counts_last250 <- read.table(file.path(file_path_ref$project_directory,
+                                            file_path_ref$sequencing$results$reads_last250_3utr), 
+                                  sep="\t",
+                                  header=TRUE)
+
+colnames(read_counts_last250) <- gsub("X.n.holyscratch01.macklis_lab.priyav.lab_notebook.cpn_cth_paper_final.star_align.", "", gsub(".Aligned.sorted.bam|.noUMI.noAdapter.noPolyA.fastq_slamdunk_mapped_filtered.UMIDedup.bam", "", colnames(read_counts_last250)))
+read_counts_last250$Geneid_first <-  sapply(read_counts_last250$Geneid, function(x) strsplit(as.character(x), ":")[[1]][1])
+
+  
+counts_data <- data.frame(read_counts_last250 %>% 
+                            group_by(Geneid_first) %>%
+                            summarize(across(all_of(metadata$sample_id), sum)))
+
+rownames(counts_data) <- counts_data$Geneid_first
+counts_data$Geneid_first <- NULL
+
+cpm_data <- sweep(counts_data, 2, colSums(counts_data), "/")*1e6
+cpm_data$ensembl_transcript_id <- rownames(counts_data)
+
+save(cpm_data, counts_data, file=file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$counts_last250bp))
+}
+
+read_format_last250_counts()
+```
+
+```{r}
+calc_gc_vs_bkg_last250 <- function(counts_data, dev_stage, stype, bkg, valid_txpts) {
+  meta_subs <- subset(metadata, 
+                      prep_type == "GC" & 
+                        ((stage ==  dev_stage & subtype == stype) | subtype == bkg))
+  
+  print(meta_subs)
+  
+  
+  # run deseq
+  dds <- DESeqDataSetFromMatrix(countData=counts_data[valid_txpts,meta_subs$sample_id],
+                                colData=meta_subs,
+                                design=~enrichment_type)
+  
+  dds <- DESeq(dds)
+  
+  print(resultsNames(dds))
+  
+  # get the result
+  res <- results(dds, name="enrichment_type_signal_vs_background",
+                 altHypothesis = "greater")
+  
+  print(summary(res))
+  
+  res_df <- data.frame(res)
+  res_df$Geneid_first <- rownames(res_df)
+  
+  res_df <- res_df %>% 
     rowwise() %>%
-    mutate(is_gcf_constant=ensembl_gene_id %in% constant_gcf_genes,
-           is_forebrain_gcf=ensembl_gene_id %in% forebrain_gcf_genes,
-           is_thalamus_gcf=ensembl_gene_id %in% thalamus_gcf_genes)
-  
-  print(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_gcf_constant),
-                                  mapping=aes(log2FoldChange, -log10(padj)),
-                                  color=accent_color_dark),
-                  dpi=300) +
-          ggtitle("GCs DPC23 DGE Colored by GCF Constant"))
-  
-  print(rasterize(base_volcano + geom_point(data=res_gc %>% subset(is_gcf_constant & 
-                                                           (is_cpn_over_input | is_cth_over_input)),
-                                  mapping=aes(log2FoldChange, -log10(padj)),
-                                  color=accent_color_dark), 
-                  dpi=300) +
-          ggtitle("GCs DPC23 DGE Colored by GCF Constant and GC Enriched"))
-  
-  final_volcano <- base_volcano + geom_point(data=res_gc %>% subset(is_gcf_constant & 
-                                                           (is_cpn_over_input | is_cth_over_input)),
-                                  mapping=aes(log2FoldChange, -log10(padj)),
-                                  color=accent_color_dark) +
-          geom_point(data=res_gc %>% subset(is_forebrain_gcf & is_cth_over_input & is_cth_subtype_gc),
-                     mapping=aes(log2FoldChange, -log10(padj)),
-                     color=cthpn_color) +
-          geom_point(data=res_gc %>% subset(is_thalamus_gcf & is_cpn_over_input & is_cpn_subtype_gc),
-                     mapping=aes(log2FoldChange, -log10(padj)),
-                     color=cpn_color) +
-          ggtitle("GCs DPC23 DGE Colored by GCF Constant and/or GC enrichment")
-  
-  
-  genes_to_label <- subset(res_gc,
-                           (is_thalamus_gcf & is_cpn_over_input & is_cpn_subtype_gc & log2FoldChange < -1) |
-                           (is_forebrain_gcf & is_cth_over_input & is_cth_subtype_gc & log2FoldChange > 1) |
-                            (-log10(padj) > 5 & abs(log2FoldChange) > 1 & is_gcf_constant & (is_cpn_over_input | is_cth_over_input)))
-  
-  print(rasterize(final_volcano, dpi=300)  + 
-          geom_text_repel(data=genes_to_label, mapping=aes(log2FoldChange, -log10(padj), label=external_gene_name), max.overlaps = 30))
-  
-  
-  
-  # do some go enrichment
-  cpn_gc_enriched <- subset(res_gc, is_thalamus_gcf & is_cpn_over_input & is_cpn_subtype_gc)$ensembl_gene_id
-  cth_gc_enriched <- subset(res_gc, is_forebrain_gcf & is_cth_over_input & is_cth_subtype_gc)$ensembl_gene_id
-  
-  subtype_enrichment <- setReadable(compareCluster(list(P3_cth_gc=cth_gc_enriched, P3_cpn_gc=cpn_gc_enriched), 
-                                               OrgDb = org.Mm.eg.db,
-                                               ont = "ALL", keyType="ENSEMBL",
-                                               universe=union(cth_soma_valid_genes,
-                                                              cpn_soma_valid_genes)), 
-                                OrgDb = org.Mm.eg.db, keyType="ENSEMBL")
-  print(dotplot(subtype_enrichment, showCategory=10))
-  
-  dev.off()
-  
-  save(dds_gc, res_gc, subtype_enrichment, file=robj_savefile)
-  
-  print("Done.")
+    mutate(is_sig=padj < 0.05) 
+  return(res_df)
   
 }
 
-compare_cth_gcs <- function(gc_vs_gcf_file, 
-                            gcf_vs_gcf_file, 
-                            soma_filter_gc_genes_file,
-                            robj_soma_file,
-                            robj_savefile) {
+calc_stage_dge_last250 <- function(counts_data, loc, stype, valid_txpts) {
+  meta_subs <- subset(metadata, 
+                      prep_type == loc & 
+                      subtype == stype)
   
-  load(gc_vs_gcf_file)
-  load(soma_filter_gc_genes_file)
-  load(robj_soma_file)
+  print(meta_subs)
   
-  pdf_savefile <- gsub(".RData", ".pdf", robj_savefile)
-  pdf(pdf_savefile)
   
-  metadata_subset <- subset(metadata, location == "GC" & subtype == "CThPN")
+  # run deseq
+  dds <- DESeqDataSetFromMatrix(countData=counts_data[valid_txpts,meta_subs$sample_id],
+                                colData=meta_subs,
+                                design=~stage)
   
-
-  #print(sprintf("GC valid genes removing genes that change >1 lfc in GCF: %s", length(valid_genes_gcf_constant)))
+  dds <- DESeq(dds)
   
-  dds_cth_gc <- run_deseq2_gene(metadata_subset,
-                                "~stage",
-                                data_dir=salmon_dir,
-                                txpt2gene=t2g_protein[,c("target_id", "ensembl_gene_id")],
-                                gene_subset=subset(above_noise_soma_express_gc_genes,
-                                                   sample_type %in% c("CThPN_GC_DPC21", "CThPN_GC_DPC23"))$ensembl_gene_id)
+  print(resultsNames(dds))
   
-  cth_gc_res <- row2col_ensgene(results(dds_cth_gc, name="stage_DPC23_vs_DPC21")) %>%
+  # get the result
+  res <- results(dds, name="stage_DPC23_vs_DPC21")
+  
+  print(summary(res))
+  
+  res_df <- data.frame(res)
+  res_df$Geneid_first <- rownames(res_df)
+  
+  res_df <- res_df %>% 
     rowwise() %>%
-    mutate(is_valid_gc=ensembl_gene_id %in% union(gc_enrich_genes$CThPN_GC_DPC23,
-                                                  gc_enrich_genes$CThPN_GC_DPC21))
+    mutate(is_sig=padj < 0.05)
   
-  print(rasterize(ggplot(cth_gc_res, 
-                   aes(log2FoldChange, -log10(padj))) + 
-                     geom_point(color=background_color) + 
-                     geom_point(data=subset(cth_gc_res, is_valid_gc), 
-                                   mapping=aes(log2FoldChange, -log10(padj)),
-                                   color=background_color_dark) +
-                     geom_point(data=subset(cth_gc_res, is_valid_gc & padj < 0.05), 
-                               mapping=aes(log2FoldChange, -log10(padj)),
-                               color=cthpn_color),
-                    dpi=300))
-  
-  
-  print(rasterize(ggplot(cth_gc_res, 
-                         aes(baseMean, log2FoldChange)) + 
-                    geom_point(color=background_color) + 
-                    geom_point(data=subset(cth_gc_res, is_valid_gc), 
-                               mapping=aes(baseMean, log2FoldChange),
-                               color=background_color_dark) +
-                    geom_point(data=subset(cth_gc_res, is_valid_gc & padj < 0.05), 
-                               mapping=aes(baseMean, log2FoldChange),
-                               color=cthpn_color) +
-                    scale_x_log10(),
-                  dpi=300))
-           
-  
-  
-  early_cth_gc <- subset(cth_gc_res, is_valid_gc & log2FoldChange < 0 & padj < 0.05)$ensembl_gene_id
-  late_cth_gc <- subset(cth_gc_res, is_valid_gc & log2FoldChange > 0 & padj < 0.05)$ensembl_gene_id
-  
-  print(early_cth_gc)
-  print(late_cth_gc)
- 
-  cth_enrichment <- simplify(setReadable(compareCluster(list(P1_cth_gc=early_cth_gc, P3_cth_gc=late_cth_gc), 
-                                         OrgDb = org.Mm.eg.db,
-                                         ont = "ALL", keyType="ENSEMBL",
-                                         universe=cth_soma_valid_genes), 
-                                OrgDb = org.Mm.eg.db, keyType="ENSEMBL"))
-  
-  print(dotplot(cth_enrichment, showCategory=15))
-  
-  dev.off()
-  save(dds_cth_gc, cth_gc_res, cth_enrichment, file=robj_savefile)
-  
-}
- 
-
-compare_cpn_gcs <- function(gc_vs_gcf_file, 
-                            gcf_vs_gcf_file, 
-                            soma_filter_gc_genes_file,
-                            robj_soma_file,
-                            robj_savefile) {
-  
-  load(gc_vs_gcf_file)
-  load(soma_filter_gc_genes_file)
-  load(robj_soma_file)
-  
-  pdf_savefile <- gsub(".RData", ".pdf", robj_savefile)
-  pdf(pdf_savefile)
-  
-  metadata_subset <- subset(metadata, location == "GC" & subtype == "CPN")
-  
-  
-  dds_cpn_gc <- run_deseq2_gene(metadata_subset,
-                                "~stage",
-                                data_dir=salmon_dir,
-                                txpt2gene=t2g_protein[,c("target_id", "ensembl_gene_id")],
-                                gene_subset=subset(above_noise_soma_express_gc_genes,
-                                                   sample_type %in% c("CPN_GC_DPC21", "CPN_GC_DPC23"))$ensembl_gene_id)
-  
-  cpn_gc_res <- row2col_ensgene(results(dds_cpn_gc, name="stage_DPC23_vs_DPC21")) %>%
-    rowwise() %>%
-    mutate(is_valid_gc=ensembl_gene_id %in% union(gc_enrich_genes$CPN_GC_DPC23,
-                                                  gc_enrich_genes$CPN_GC_DPC21))
-  
-  print(rasterize(ggplot(cpn_gc_res, 
-                         aes(log2FoldChange, -log10(padj))) + 
-                    geom_point(color=background_color) + 
-                    geom_point(data=subset(cpn_gc_res, is_valid_gc), 
-                               mapping=aes(log2FoldChange, -log10(padj)),
-                               color=background_color_dark) +
-                    geom_point(data=subset(cpn_gc_res, is_valid_gc & padj < 0.05), 
-                               mapping=aes(log2FoldChange, -log10(padj)),
-                               color=cpn_color),
-                  dpi=300))
-  
-  
-  print(rasterize(ggplot(cpn_gc_res, 
-                         aes(baseMean, log2FoldChange)) + 
-                    geom_point(color=background_color) + 
-                    geom_point(data=subset(cpn_gc_res, is_valid_gc), 
-                               mapping=aes(baseMean, log2FoldChange),
-                               color=background_color_dark) +
-                    geom_point(data=subset(cpn_gc_res, is_valid_gc & padj < 0.05), 
-                               mapping=aes(baseMean, log2FoldChange),
-                               color=cpn_color) +
-                    scale_x_log10(),
-                  dpi=300))
-  
-  
-  
-  early_cpn_gc <- subset(cpn_gc_res, is_valid_gc & log2FoldChange < 0 & padj < 0.05)$ensembl_gene_id
-  late_cpn_gc <- subset(cpn_gc_res, is_valid_gc & log2FoldChange > 0 & padj < 0.05)$ensembl_gene_id
-  
-  print(early_cpn_gc)
-  print(late_cpn_gc)
-  
-  cpn_enrichment <- setReadable(compareCluster(list(P1_cpn_gc=early_cpn_gc, P3_cpn_gc=late_cpn_gc), 
-                                               OrgDb = org.Mm.eg.db,
-                                               ont = "ALL", keyType="ENSEMBL",
-                                               universe=cpn_soma_valid_genes), 
-                                OrgDb = org.Mm.eg.db, keyType="ENSEMBL")
-  
-  print(dotplot(cpn_enrichment))
-  
-  dev.off()
-  save(dds_cpn_gc, cpn_gc_res, cpn_enrichment, file=robj_savefile)
+  return(res_df)
   
 }
 
+```
+
+```{r}
+get_utr_gc_vs_gcf <- function() {
+  
+  # load the counts data
+  load(file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$counts_last250bp))
+
+  # compute soma valid txpts
+cth_soma <- counts_data[,grepl("CThPN_Soma", colnames(counts_data))]
+cth_soma_norm <- sweep(cth_soma, 2, colSums(cth_soma), "/")*1e6
+cth_soma_norm$Geneid <- rownames(counts_data)
+cth_soma_norm <- cth_soma_norm %>% 
+  pivot_longer(contains("CTh"), names_to="sample_id", values_to ="CPM") %>%
+  inner_join(metadata, by="sample_id")
+
+cth_soma_agg <- cth_soma_norm %>%
+  group_by(Geneid, stage) %>%
+  summarize(mean_CPM=mean(CPM)) %>%
+  rowwise() %>%
+  mutate(is_valid=mean_CPM > 2)
+cth_soma_agg$Geneid_first <- sapply(cth_soma_agg$Geneid, function(x) strsplit(as.character(x), ":")[[1]][1])
+
+cth_valid_txpts <- unique(subset(cth_soma_agg, is_valid)$Geneid_first)
+
+# cpn
+cpn_soma <- counts_data[,grepl("CPN_Soma", colnames(counts_data))]
+cpn_soma_norm <- sweep(cpn_soma, 2, colSums(cpn_soma), "/")*1e6
+cpn_soma_norm$Geneid <- rownames(counts_data)
+cpn_soma_norm <- cpn_soma_norm %>% 
+  pivot_longer(contains("CPN"), names_to="sample_id", values_to ="CPM") %>%
+  inner_join(metadata, by="sample_id") 
+
+cpn_soma_agg <- cpn_soma_norm %>%
+  group_by(Geneid, stage) %>%
+  summarize(mean_CPM=mean(CPM)) %>%
+  rowwise() %>%
+  mutate(is_valid=mean_CPM > 2) 
+cpn_soma_agg$Geneid_first <- sapply(cpn_soma_agg$Geneid, function(x) strsplit(as.character(x), ":")[[1]][1])
+
+cpn_valid_txpts <- unique(subset(cpn_soma_agg, is_valid)$Geneid_first)
 
 
-### MAIN ###
-# create differential expression directory
-dir.create(file.path(file_path_ref$project_directory, 
-                     dirname(file_path_ref$sequencing$results[[1]])),
-           recursive=TRUE)
+# load txpt info data 
+load(file.path(file_path_ref$project_dir, file_path_ref$external_data$last250_coordinates))
 
-# create excel file to record all the dge data for the supplement
-excel_dge <- file.path(file_path_ref$project_directory,
-                       file_path_ref$sequencing$results$all_dge_results)
+txpt_info_cols <- c("Geneid_first", 
+                                               "longest_txpt", 
+                                               "utr_length_longest", 
+                                               "ensembl_gene_id", 
+                                               "external_gene_name")
 
-# create excel file to record all GO enrichment for the supplement
-excel_go <- file.path(file_path_ref$project_directory,
-                       file_path_ref$sequencing$results$all_dge_go_results)
+longest_txpt <- unique(coords_last250_collapsed_df[,txpt_info_cols])
 
-
-# load somata data
-# determine expression thresholds
-all_soma_file <- file.path(file_path_ref$project_directory, 
-                           file_path_ref$sequencing$results$all_soma_comparison)
+# run GC over GCF for dpc23 cpn, augment with longest txpt info
+dpc23_cpn_res <- calc_gc_vs_bkg_last250(counts_data, "DPC23", "CPN", "Forebrain_Background", cpn_valid_txpts) %>%
+  subset(!is.na(padj)) %>%
+  inner_join(longest_txpt, by="Geneid_first")
 
 
-
-compare_all_soma(all_soma_file)
-
-compare_dpc23_soma(all_soma_file,
-                   file.path(file_path_ref$project_directory, 
-                             file_path_ref$sequencing$results$dpc23_soma_comparison))
-
-compare_cpn_soma(all_soma_file,
-                 file.path(file_path_ref$project_directory, 
-                           file_path_ref$sequencing$results$cpn_soma_comparison))
-
-compare_cth_soma(all_soma_file,
-                 file.path(file_path_ref$project_directory, 
-                           file_path_ref$sequencing$results$cthpn_soma_comparison),
-                 excel_dge,
-                 excel_go)
+dpc21_cpn_res <- calc_gc_vs_bkg_last250(counts_data, "DPC21", "CPN", "Forebrain_Background", cpn_valid_txpts) %>%
+ subset(!is.na(padj)) %>%
+  inner_join(longest_txpt, by="Geneid_first")
 
 
-# use somata thresholds to determine lower-bound expression thershold
-soma_filter_gc_genes_file <-
-  file.path(file_path_ref$project_directory,
-            file_path_ref$sequencing$results$soma_filter_gc_genes)
-
-soma_filter_gc_genes(all_soma_file, 
-                     soma_filter_gc_genes_file,
-                     excel_dge,
-                     excel_go)
-
-gc_vs_gcf_comparison_file <- 
-  file.path(file_path_ref$project_directory, 
-            file_path_ref$sequencing$results$gc_vs_gcf_comparison)
-
-compare_gc_vs_gcf_all(all_soma_file,
-                      soma_filter_gc_genes_file,
-                      gc_vs_gcf_comparison_file,
-                      excel_dge,
-                      excel_go)
+cpn_gc_vs_gcf_txpt <- dpc23_cpn_res %>% 
+  full_join(dpc21_cpn_res, by=txpt_info_cols,
+            suffix=c(".CPN_GC_DPC23.vs.Forebrain_Background",
+                     ".CPN_GC_DPC21.vs.Forebrain_Background")) %>%
+  rowwise() %>%
+  mutate(CPN_GC_DPC23=padj.CPN_GC_DPC23.vs.Forebrain_Background < 0.05,
+         CPN_GC_DPC21=padj.CPN_GC_DPC21.vs.Forebrain_Background < 0.05)
 
 
-gcf_comparison_file <-
-  file.path(file_path_ref$project_directory,
-            file_path_ref$sequencing$results$gcf_comparison)
+# look at thalamus
+dpc23_cth_res1 <- calc_gc_vs_bkg_last250(counts_data, "DPC23", "CThPN", "Forebrain_Background", cth_valid_txpts) %>%
+  subset(!is.na(padj)) %>%
+  inner_join(longest_txpt, by="Geneid_first")
 
-compare_gcf(all_soma_file,
-            soma_filter_gc_genes_file,
-            gcf_comparison_file,
-            excel_dge,
-            excel_go)
+dpc23_cth_res2 <- calc_gc_vs_bkg_last250(counts_data, "DPC23", "CThPN", "Thalamus_Background", cth_valid_txpts) %>%
+  subset(!is.na(padj)) %>%
+  inner_join(longest_txpt, by="Geneid_first")
 
-compare_all_dpc23(all_soma_file,
-                  soma_filter_gc_genes_file,
-                  gc_vs_gcf_comparison_file, 
-                  gcf_comparison_file, 
-                  file.path(file_path_ref$project_directory,
-                            file_path_ref$sequencing$results$all_dpc23_comparison),
-                  excel_dge,
-                  excel_go)
+dpc23_cth_res <- dpc23_cth_res1 %>% 
+  full_join(dpc23_cth_res2, by=txpt_info_cols,
+            suffix=c(".CThPN_GC_DPC23.vs.Forebrain_Background", 
+            ".CThPN_GC_DPC23.vs.Thalamus_Background")) %>%
+  rowwise() %>%
+  mutate(CThPN_GC_DPC23=sum(across(contains("is_sig"))) == 2)
 
-
-compare_all_gcs(all_soma_file,
-                soma_filter_gc_genes_file,
-                gc_vs_gcf_comparison_file, 
-                file.path(file_path_ref$project_directory,
-                          file_path_ref$sequencing$results$all_gc_comparison),
-                excel_dge,
-                excel_go)
+# get full info
+gc_vs_gcf_txpt_df <- cpn_gc_vs_gcf_txpt %>% 
+  full_join(dpc23_cth_res, by=txpt_info_cols)
 
 
-
-compare_dpc23_gcs(all_soma_file,
-                  soma_filter_gc_genes_file,
-                  gc_vs_gcf_comparison_file,
-                  gcf_comparison_file,
-                  file.path(file_path_ref$project_directory,
-                            file_path_ref$sequencing$results$dpc23_gcs_comparison),
-                  excel_dge,
-                  excel_go)
+dpc23_cth_res$stype <- "P3_CTh_GC"
+dpc23_cth_res$is_sig <- dpc23_cth_res$CThPN_GC_DPC23
+dpc23_cpn_res$stype <- "P3_CPN_GC"
+dpc21_cpn_res$stype <- "P1_CPN_GC"
 
 
+# simplify for transite run
+gc_res_for_transite <- do.call(rbind, lapply(list(dpc23_cth_res, dpc23_cpn_res, dpc21_cpn_res),
+                      function(df) dplyr::select(df, 
+                                                 c(longest_txpt,
+                                                   utr_length_longest, 
+                                                   is_sig, stype))))%>%
+  rowwise() %>% 
+  mutate(gene_group=ifelse(is_sig, stype, gsub("GC", "Soma", stype)))
+gc_res_for_transite$gene_group <- factor(gc_res_for_transite$gene_group, levels=c("P3_CTh_Soma", "P3_CTh_GC", 
+                                                                           "P3_CPN_Soma", "P3_CPN_GC",
+                                                                           "P1_CPN_Soma", "P1_CPN_GC"))
 
-compare_dpc23_cpn_dpc21_cth(
-  all_soma_file,
-  soma_filter_gc_genes_file,
-  gc_vs_gcf_comparison_file,
-  gcf_comparison_file,
-  file.path(file_path_ref$project_directory,
-            file_path_ref$sequencing$results$dpc3_cpn_dpc21_cth_comparison),
-  excel_dge,
-  excel_go)
+
+ 
+
+# save files
+save(gc_vs_gcf_txpt_df, gc_res_for_transite, cpn_valid_txpts, cth_valid_txpts, file=file.path(file_path_ref$project_directory,
+                                       file_path_ref$sequencing$results$gc_vs_gcf_utr_comparison))
+}
+
+get_utr_gc_vs_gcf()
+```
+
+```{r}
+## CPN STAGE COMPARISONS
+calc_gsea_isoforms <- function(dtu_df) {
+# In order to do gsea, need to collapse transcripts for one gene into a single gene
+dge_maxiso <- dtu_df %>%
+  group_by(ensembl_gene_id) %>%
+  summarize(lfc_maxiso=log2FoldChange[which.max(baseMean)]) %>%
+  arrange(desc(lfc_maxiso))
+
+dge_maxiso_lst <- dge_maxiso$lfc_maxiso
+names(dge_maxiso_lst) <- dge_maxiso$ensembl_gene_id
+dge_maxiso_gsea <- gseGO(dge_maxiso_lst, ont="ALL", OrgDb = org.Mm.eg.db, keyType="ENSEMBL")
+
+return(dge_maxiso_gsea)
+}
+
+get_cpn_stage_dtu <- function() {
+  
+  # load counts data
+  load(file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$counts_last250bp))
+  
+  # load gc vs gcf data
+  load(file.path(file_path_ref$project_directory,
+                                       file_path_ref$sequencing$results$gc_vs_gcf_utr_comparison))
+  
+
+  cpn_gc_dtu <- calc_stage_dge_last250(counts_data, "GC", "CPN", cpn_valid_txpts) %>%
+    inner_join(t2g_protein, by=c("Geneid_first" = "ensembl_transcript_id"))
+  
+  # subset to only get the GC/GCF genes
+  cpn_gc_dtu <- cpn_gc_dtu %>% 
+  subset(Geneid_first %in% subset(gc_vs_gcf_txpt_df,
+                                   is_sig.CPN_GC_DPC23.vs.Forebrain_Background |
+                                     is_sig.CPN_GC_DPC21.vs.Forebrain_Background)$Geneid_first)
+  
+
+  cpn_soma_dtu <- calc_stage_dge_last250(counts_data, "Soma", "CPN", cpn_valid_txpts) %>%
+  inner_join(t2g_protein, by=c("Geneid_first" = "ensembl_transcript_id"))
+
+  cpn_gc_gsea <- calc_gsea_isoforms(cpn_gc_dtu)
+
+  cpn_soma_gsea <- calc_gsea_isoforms(cpn_soma_dtu)
+
+  save(cpn_soma_dtu, cpn_gc_dtu, cpn_soma_gsea, cpn_gc_gsea, 
+       file=file.path(file_path_ref$project_directory, 
+                      file_path_ref$sequencing$results$figure5_dtu_results))
+}
+
+get_cpn_stage_dtu()
+```
+## Compile DGE results
+```{r}
+# compile all pairwise results into list of data frames named by contrast
+compile_dge_results <- function() {
+  
+  dge_results <- list(gene_level=list(), transcript_level=list())
+  
+  # gene level
+  load(file.path(file_path_ref$project_directory,
+                 file_path_ref$sequencing$results$counts_gene_level))
+  cpm_long <- cpm_data %>% pivot_longer(!contains("ensembl"),
+                                        names_to="sample_id",
+                                        values_to="CPM") %>%
+    inner_join(metadata, by="sample_id")
+  
+  dge_results[["gene_level"]][["CPM"]] <- cpm_long
+  
+  load(file.path(file_path_ref$project_directory,
+                 file_path_ref$sequencing$results$gc_vs_gcf_comparison))
+  dge_results[["gene_level"]][["gc_vs_gcf"]] <- gc_enrich_dge_df
+  
+  # subtype soma
+  load(file.path(file_path_ref$project_directory,
+                 file_path_ref$sequencing$results$dpc23_soma_comparison))
+  dge_results[["gene_level"]][["cpn_soma_dpc23_vs_cth_soma_dpc23"]] <- dge_res
+  
+  # stage cpn soma
+  load(file.path(file_path_ref$project_directory,
+                 file_path_ref$sequencing$results$cpn_soma_comparison))
+  dge_results[["gene_level"]][["cpn_soma_dpc21_vs_cpn_soma_dpc23"]] <- dge_res
+  
+  # stage cth soma
+  load(file.path(file_path_ref$project_directory,
+                 file_path_ref$sequencing$results$cthpn_soma_comparison))
+  dge_results[["gene_level"]][["cth_soma_dpc21_vs_cth_soma_dpc23"]] <- dge_res
+  
+  # gc vs gcf
+  load(file.path(file_path_ref$project_directory,
+                 file_path_ref$sequencing$results$gc_vs_gcf_comparison))
+  dge_results[["gene_level"]][["gc_vs_gcf"]] <- gc_enrich_dge_df
+  
+  # subtype gc
+  load(file.path(file_path_ref$project_directory,
+                 file_path_ref$sequencing$results$dpc23_gcs_comparison))
+  dge_results[["gene_level"]][["cpn_gc_dpc23_vs_cth_gc_dpc23"]] <- res_gc
+  
+  # cpn gc
+  load(file.path(file_path_ref$project_directory,
+                 file_path_ref$sequencing$results$cpn_gc_comparison))
+  dge_results[["gene_level"]][["cpn_gc_dpc21_vs_cpn_gc_dpc23"]] <- gc_res
 
   
-compare_cth_gcs(
-  all_soma_file,
-  soma_filter_gc_genes_file,
-  gc_vs_gcf_comparison_file,
-  gcf_comparison_file,
-  file.path(file_path_ref$project_directory,
-            file_path_ref$sequencing$results$cth_gc_comparison),
-  excel_dge,
-  excel_go)
+   # cth gc
+  load(file.path(file_path_ref$project_directory,
+                 file_path_ref$sequencing$results$cth_gc_comparison))
+  dge_results[["gene_level"]][["cth_gc_dpc21_vs_cth_gc_dpc23"]] <- gc_res
+
+    
+  ## UTR level
+  load(file.path(file_path_ref$project_directory,
+                 file_path_ref$sequencing$results$counts_last250bp))
+  dge_results[["transcript_level"]][["counts"]] <- counts_data
+  
+  cpm_long <- cpm_data %>% pivot_longer(!contains("ensembl"),
+                                        names_to="sample_id",
+                                        values_to="CPM") %>%
+    inner_join(metadata, by="sample_id")
+  
+  dge_results[["transcript_level"]][["CPM"]] <- cpm_long
+
+  load(file.path(file_path_ref$project_directory,
+                                       file_path_ref$sequencing$results$gc_vs_gcf_utr_comparison))
+  dge_results[["transcript_level"]][["gc_vs_gcf"]] <- gc_vs_gcf_txpt_df
+  
+  load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$figure5_dtu_results))
+    dge_results[["transcript_level"]][["cpn_gc_dpc21_vs_cpn_gc_dpc23"]] <- cpn_gc_dtu
+    dge_results[["transcript_level"]][["cpn_soma_dpc21_vs_cpn_soma_dpc23"]] <- cpn_soma_dtu
+    
+  save(dge_results, file=file.path(file_path_ref$project_directory, 
+                                   file_path_ref$sequencing$results$all_dge_results))
 
 
-compare_cpn_gcs(
-  all_soma_file,
-  soma_filter_gc_genes_file,
-  gc_vs_gcf_comparison_file,
-  gcf_comparison_file,
-  file.path(file_path_ref$project_directory,
-            file_path_ref$sequencing$results$cpn_gc_comparison),
-  excel_dge,
-  excel_go)
+}
 
-
+compile_dge_results()
+```

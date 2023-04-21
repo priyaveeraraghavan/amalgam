@@ -134,7 +134,7 @@ plot_main_1f <- function(plot_savefile) {
   
   plt <- ggplot(goterm_df, aes(str_wrap(gsub("_", " ", Cluster), width=8), description, size=gene_ratio, color=p.adjust)) +
     geom_point() +
-    scale_color_gradient(low=accent_color_scale_dark, high=accent_color_scale_light)+
+    scale_color_gradient(low=accent_color_go_dark, high=accent_color_go_light)+
     theme_bw() +
     xlab("") + ylab("") +
     theme(text=element_text(size=8))
@@ -150,3 +150,178 @@ plot_main_1f(file.path(file_path_ref$project_directory,
                        file_path_ref$plots$plot_directory, "main_1f.pdf"))
 ```
 
+# Supplement
+```{r}
+plot_supplement_4b_ambient_ma <- function(plot_saveprefix) {
+  
+  load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$all_dge_results))
+  
+  
+  gc_vs_gcf <- dge_results$gene_level$gc_vs_gcf
+  cpn_colored <- subset(gc_vs_gcf, CPN_GC_DPC23)
+  cth_colored <- subset(gc_vs_gcf, CThPN_GC_DPC23)
+  
+  # plot cpn
+  plt1 <- rasterize(ggplot(gc_vs_gcf, 
+                           aes(baseMean.CPN_GC_DPC23.vs.Forebrain_Background, 
+                               log2FoldChange.CPN_GC_DPC23.vs.Forebrain_Background)) +
+    geom_point(color=background_color, size=0.5), dpi=300) +
+    rasterize(geom_point(data=cpn_colored, 
+                         mapping=aes(baseMean.CPN_GC_DPC23.vs.Forebrain_Background, 
+                                     log2FoldChange.CPN_GC_DPC23.vs.Forebrain_Background),
+                         color=cpn_color,
+                         size=0.5),
+              dpi=300) +
+    scale_x_log10() +
+    ggtitle(sprintf("%s CPN_GC Genes", nrow(cpn_colored))) +
+    ylab("Log2 CPN GC/Input") +
+    xlab("Average Counts") +
+    theme_classic() +
+    theme(text=element_text(size=7))
+  
+  plot(plt1)
+  
+  plt2 <- rasterize(ggplot(gc_vs_gcf, 
+                           aes(log2FoldChange.CThPN_GC_DPC23.vs.Forebrain_Background,
+                               log2FoldChange.CThPN_GC_DPC23.vs.Thalamus_Background)) +
+                      geom_point(color=background_color, size=0.5), dpi=300) +
+    rasterize(geom_point(data=cth_colored,
+                         mapping=aes(log2FoldChange.CThPN_GC_DPC23.vs.Forebrain_Background,
+                               log2FoldChange.CThPN_GC_DPC23.vs.Thalamus_Background),
+                         color=cthpn_color,
+                         size=0.5),
+              dpi=300) +
+        ggtitle(sprintf("%s CThPN_GC Genes", nrow(cth_colored))) +
+    ylab("Log2 CTh GC/GCF Thalamus") +
+    xlab("Log2 CTh GC/GCF Forebrain")+
+    theme_classic() +
+    theme(text=element_text(size=7))
+
+  
+  plot(plt2)
+  
+  
+  ggsave(sprintf("%s_cpn.pdf", plot_saveprefix),
+         plot=plt1, height=70, width=90, units="mm", device="pdf")
+  
+  ggsave(sprintf("%s_cth.pdf", plot_saveprefix),
+         plot=plt2, height=70, width=70, units="mm", device="pdf")
+  
+  
+}
+
+plot_supplement_4b_ambient_ma(file.path(file_path_ref$project_directory,
+                                        file_path_ref$plots$plot_directory,
+                                        "supplement_4b_ambient_ma"))
+```
+Option to use Table S4 from single cell mouse brain atlas at P2 and P11 from Rosenberg, et al. 2020, Science (DOI: 10.1126/science.aam8999) in which the top 50 genes from each tSNE cluster are annotated. 
+```{r}
+plot_contaminants <- function(contam_df, gc_vs_gcf) {
+  
+  gc_vs_gcf_contam <- dge_results$gene_level$gc_vs_gcf %>%
+    inner_join(contam_df, by="external_gene_name") 
+  
+  median_lfc <- gc_vs_gcf_contam %>%
+    group_by(Cell_Type) %>%
+    summarize(med_lfc=median(na.omit(log2FoldChange.CPN_GC_DPC23.vs.Forebrain_Background))) %>%
+    arrange(desc(med_lfc))
+  
+  gc_enrich_genes <- subset(dge_results$gene_level$gc_vs_gcf, CPN_GC_DPC23) %>%
+    rowwise() %>%
+    mutate(Cell_Type="GC_Enriched")
+  
+  to_plot <- rbind(gc_vs_gcf_contam, gc_enrich_genes) %>%
+    rowwise() %>%
+    mutate(group_color=ifelse(Cell_Type == "GC_Enriched", "Signal",
+                              "Background"))
+  to_plot$Cell_Type <- factor(to_plot$Cell_Type, levels=c("GC_Enriched", median_lfc$Cell_Type))
+  
+  plt <- ggplot(to_plot, aes(Cell_Type, 
+                             log2FoldChange.CPN_GC_DPC23.vs.Forebrain_Background,
+                             fill=group_color)) +
+    geom_boxplot(linewidth=0.2, outlier.size = 0.2) +
+    coord_flip() +
+    theme_classic() +
+    scale_fill_manual(values=c(background_color, cpn_color)) + 
+    theme(text=element_text(size=7), legend.position="None")
+  
+  return(plt)
+  
+  
+}
+
+
+plot_supplement_4c_ambient_markers <- function(plot_saveprefix) {
+  
+   load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$all_dge_results))
+  
+  
+  contaminant_small <- read_xlsx(file.path(file_path_ref$project_directory,
+                                      file_path_ref$external_data$contaminant_marker_genes)) %>%
+    dplyr::select(-Source)
+  
+  plt1 <- plot_contaminants(contaminant_small)
+  ggsave(sprintf("%s_small.pdf", plot_saveprefix),
+         plot=plt1,
+         height=80, width=80, units="mm", device="pdf")
+    
+  sc_clust <- read_xlsx("C:/Users/prv892/Documents/GitHub/amalgam/data/external_data/Rosenberg_etal_SingleCell_Clusters.xlsx", skip=1) %>%
+    pivot_longer(everything(),
+                 names_to="Cell_Type",
+                 values_to="external_gene_name")
+  
+  
+  plt2 <- plot_contaminants(sc_clust) 
+  
+    ggsave(sprintf("%s_single_cell_clusters.pdf", plot_saveprefix),
+         plot=plt2,
+         height=150, width=120, units="mm", device="pdf")
+  
+}
+
+plot_supplement_4c_ambient_markers(file.path(file_path_ref$project_directory,
+                                             file_path_ref$plots$plot_directory,
+                                             "supplement_4c_ambient_markers"))
+```
+
+```{r}
+plot_supplement_4d_ambient_goterms <- function(plot_savefile) {
+  load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$all_dge_results))
+  
+
+  gc_enrich <- unique(subset(dge_results$gene_level$gc_vs_gcf, 
+                            CPN_GC_DPC23)$ensembl_gene_id)
+  input_enrich <- unique(subset(dge_results$gene_level$gc_vs_gcf,
+                log2FoldChange.CPN_GC_DPC23.vs.Forebrain_Background < 0 &
+                   log2FoldChange.CThPN_GC_DPC23.vs.Forebrain_Background < 0 &
+                  log2FoldChange.CThPN_GC_DPC23.vs.Thalamus_Background < 0)$ensembl_gene_id)
+  
+  bkg <- unique(dge_results$gene_level$gc_vs_gcf$ensembl_gene_id)
+  
+  go_enrich_bkg <- compareCluster(list(GC_Enriched=gc_enrich,
+                      Input_Enriched=input_enrich),
+                 ont="ALL", 
+                 OrgDb=org.Mm.eg.db,
+                 keyType="ENSEMBL",
+                 universe=bkg)
+  
+  plt <- plot_goterm_dotplot(go_enrich_bkg@compareClusterResult) +
+    scale_color_gradient(low=accent_color_go_dark, high=accent_color_go_light)
+  
+  plot(plt)
+  
+   ggsave(plot_savefile,
+         plot=plt,
+         height=120, width=100, units="mm", device="pdf",
+         useDingbats=FALSE)
+  
+  
+  
+}
+plot_supplement_4d_ambient_goterms(file.path(file_path_ref$project_directory,
+                                             file_path_ref$plots$plot_directory,
+                                             "supplement_4d_ambient_goterms.pdf"))
+```

@@ -5,7 +5,9 @@
 		"salmon_directory": "data/sequencing/salmon_align",
 		"setup_script": "scripts/ngs_scripts/setup.R",
 		"results" : {
-			"all_dge_results" : "data/sequencing/differential_expression/all_dge_results.xlsx",
+			"all_dge_results" : "data/sequencing/differential_expression/all_dge_results.RData",
+			"counts_gene_level" : "data/sequencing/differential_expression/counts_gene_level.RData",
+			"counts_last250bp" : "data/sequencing/differential_expression/counts_last250bp.RData",
 			"all_dge_go_results" : "data/sequencing/differential_expression/all_dge_go_results.xlsx",
 			"all_soma_comparison" : "data/sequencing/differential_expression/all_soma_comparison.RData",
 			"dpc23_soma_comparison" : "data/sequencing/differential_expression/dpc23_soma_comparison.RData",
@@ -13,6 +15,7 @@
 			"cthpn_soma_comparison" : "data/sequencing/differential_expression/cthpn_soma_comparison.RData",
 			"soma_filter_gc_genes" : "data/sequencing/differential_expression/soma_filter_gc_genes.RData",
 			"gc_vs_gcf_comparison" : "data/sequencing/differential_expression/gc_vs_gcf_comparison.RData",
+			"gc_vs_gcf_utr_comparison" : "data/sequencing/differential_expression/gc_vs_gcf_txpt_comparison.RData",
 			"gcf_comparison" : "data/sequencing/differential_expression/gcf_comparison.RData",
 			"dpc23_gcs_pairwise_go" : "data/sequencing/differential_expression/dpc23_gcs_pairwise_go.RData",
 			"dpc23_cpn_vs_dpc21_cth_gcs_pairwise_go" : "data/sequencing/differential_expression/dpc23_cpn_vs_dpc21_cth_gcs_pairwise_go.RData",
@@ -25,7 +28,15 @@
 			"all_gc_comparison" : "data/sequencing/differential_expression/all_gc_comparison.RData",
 			"cth_gc_comparison": "data/sequencing/differential_expression/cth_gc_comparison.RData",
 			"cpn_gc_comparison": "data/sequencing/differential_expression/cpn_gc_comparison.RData",
-			"intersect_disease_genes" : "data/sequencing/differential_expression/intersect_disease_genes.RData"
+			"intersect_disease_genes" : "data/sequencing/differential_expression/intersect_disease_genes.RData",
+			"reads_last250_3utr" : "data/sequencing/quantseq/feature_counts_last250.clean.txt",
+			"gc_vs_soma_utr_info" : "data/sequencing/differential_expression/gc_vs_soma_utr_info.RData",
+			"gc_vs_soma_utr_motifs" : "data/sequencing/differential_expression/gc_vs_soma.TSMA_results.RData",
+			"cpn_gc_stage_utr_info" : "data/sequencing/differential_expression/cpn_gc_stage_utr_info.RData",
+			"figure5_dtu_results" : "data/sequencing/differential_expression/cpn_gc_stage_utr_info.RData",
+			"valid_transcripts_quantseq" : "data/sequencing/quantseq/valid_transcripts_quantseq.RData",
+			"counts_last250_valid_transcripts_quantseq" : "data/sequencing/quantseq/counts_last250_valid_transcripts_quantseq.RData",
+			"cpn_stage_utr_analysis" : "data/sequencing/differential_expression/cpn_stage_utr_analysis.RData"
 		}
 	},
 	"external_data": {
@@ -33,8 +44,12 @@
 		"sfari" : "data/external_data/SFARI-Gene_genes_11-07-2022.csv",
 		"schema_ptv": "data/external_data/SCHEMA_Schizophrenia_results_2022_04_12_18_25_15.csv",
 		"schema_finemap" : "data/external_data/Trubetskoy_etal_Nature_2022_Prioritized_Schizophrenia.csv",
-		"bipex" : "data/external_data/Palmer_NatGen_2022_Bipolar_Disorder_results_2022_04_12_18_47_43.csv"
-
+		"bipex" : "data/external_data/Palmer_NatGen_2022_Bipolar_Disorder_results_2022_04_12_18_47_43.csv",
+		"last250_coordinates" : "data/external_data/ensembl_GRCm38_101_coords_last250.RData",
+		"utr3_coordinates" : "data/external_data/ensembl_grcm38_101_utr3_coordinates.RData",
+		"rbms1_irclip" : "data/external_data/Navickas_etal_Rbms1_irCLIP_CancerDiscovery_2020_Table_S1.xlsx",
+		"cxpn_temporal_microarray" : "data/external_data/cxpn_temporal_microarray",
+		"contaminant_marker_genes" : "data/external_data/contaminant_marker_genes.xlsx"
 	},
 	"plots" : {
 		"setup_script" : "scripts/plot_scripts/plot_helper.R",
