@@ -15,6 +15,7 @@ TODO:
 Also look at length of neurites at P1 vs P3
 ```{r}
 library(dplyr)
+library(mclust)
 library(ggplot2)
 ```
 
@@ -53,19 +54,22 @@ get_dapi_profiles <- function(rbp_meta) {
                      lapply(dapi_files, 
                             function(x) read.csv(x) %>% 
                               rowwise() %>% 
-                              mutate(fname=basename(x)))))
+                              mutate(fname=basename(x)) %>%
+                              dplyr::rename(is_soma=X))))
   
+
   plot(ggplot(dapi_profiles, 
          aes(Gray_Value, color=fname)) + 
            geom_density() +
          theme(legend.position="None") +
          scale_x_log10() +
-         geom_vline(xintercept = dapi_thresh))
+         geom_vline(xintercept = dapi_thresh) +
+         facet_wrap(vars(is_soma)))
 }
 
 ```
 ```{r}
-get_channel_meangray_bin <- function(file, dapi_file, dapi_thresh, num_bins=20) {
+get_channel_meangray_bin <- function(file, dapi_file, dapi_thresh, num_bins=40) {
 
   
   meangray_file_colnames <- c("distance_microns", "gray_value", "is_axon")	
@@ -73,7 +77,23 @@ get_channel_meangray_bin <- function(file, dapi_file, dapi_thresh, num_bins=20) 
   # read in dapi channel
   res_dapi <- read.csv(dapi_file) 
   colnames(res_dapi) <- meangray_file_colnames
-
+  
+  # what is the dapi signal in soma
+  mod <- Mclust(log10(subset(res_dapi, is_axon == 0)$gray_value))
+  # get clustering parameters
+  summary_mod <- summary(mod, parameters=TRUE)
+  # true DAPI will be the biggest value
+  which_clust <- which.max(summary_mod$mean)
+  num_clust <- length(summary_mod$mean)
+  dapi_thresh <- 10^qnorm(0.01, 
+                       mean=summary_mod$mean[which_clust], 
+                       sd=sqrt(summary_mod$variance[which_clust]))
+  
+  plot(ggplot(res_dapi, aes(gray_value)) + 
+    geom_density() + geom_vline(xintercept=dapi_thresh) +
+      scale_x_log10() +
+      facet_wrap(vars(is_axon)))
+  
   # read in other channel
   res <- read.csv(file)
   colnames(res) <- meangray_file_colnames
@@ -200,8 +220,8 @@ plot_axon <- function(neuron_bin_stats, plot_savefile, h=160, w=80) {
     
     df_to_plot <- subset(neuron_bin_stats, bin_name != "Soma" & channel == chan & num_values_bin >= 5)
     # need to reorder the bins to get proximal to distal in right order
-    maxval_bins <- max(df_to_plot$bin)
-    df_to_plot$bin <- maxval_bins+1-df_to_plot$bin
+    #maxval_bins <- max(df_to_plot$bin)
+    #df_to_plot$bin <-  maxval_bins+1-df_to_plot$bin
     
     plt <- ggplot(df_to_plot,
                   aes(bin, mean_gray_value, group=stage, color=stage)) +
@@ -214,8 +234,9 @@ plot_axon <- function(neuron_bin_stats, plot_savefile, h=160, w=80) {
                               group=stage),
                   alpha=0.5) +
       ggtitle(sprintf("Channel: %s, Stat: mean", chan)) +
+      xlab("Proximal <- Bin -> Distal") +
       theme_classic() +
-      coord_flip()
+      coord_flip() 
     
     plot(plt)
     
@@ -236,8 +257,8 @@ Calculate the axon stats and plot
 Weird bump in the middle of P1 Cpeb4 could be real? not a dapi signal. Look at neuron 5 image, for example.
 ```{r}
 cpeb4_meta <- get_meta_from_files("Cpeb4")
-cpeb4_meta$dapi_thresh <- 500
-get_dapi_profiles(cpeb4_meta)
+#cpeb4_meta$dapi_thresh <- 5000
+#get_dapi_profiles(cpeb4_meta)
 
 
 cpeb4_neuron_bins <- suppressMessages(calculate_all_neurons(cpeb4_meta))
@@ -249,9 +270,22 @@ plot_axon(cpeb4_neuron_bin_stats, file.path(plot_dir, "Cpeb4_axon_profiles.pdf")
 
 ```
 ```{r}
+cpeb2_meta <- get_meta_from_files("Cpeb2")
+cpeb2_meta$dapi_thresh <- 5000
+get_dapi_profiles(cpeb2_meta)
+
+
+cpeb2_neuron_bins <- suppressMessages(calculate_all_neurons(cpeb2_meta))
+
+plot_soma(cpeb2_neuron_bins, file.path(plot_dir, "Cpeb2_soma_intensities.pdf"))
+
+cpeb2_neuron_bin_stats <- calculate_stats_all_neurons(cpeb2_neuron_bins)
+plot_axon(cpeb2_neuron_bin_stats, file.path(plot_dir, "Cpeb2_axon_profiles.pdf")) 
+
+```
+
+```{r}
 rbms1_meta <- get_meta_from_files("Rbms1")
-rbms1_meta$dapi_thresh <- 500
-get_dapi_profiles(rbms1_meta)
 
 rbms1_neuron_bins <- suppressMessages(calculate_all_neurons(rbms1_meta))
 

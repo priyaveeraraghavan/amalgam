@@ -24,6 +24,100 @@ source(file.path(file_path_ref$project_directory, file_path_ref$plots$setup_scri
 
 ```
 
+Run motif enrichment for somata and GCs
+```{r}
+load(file.path(file_path_ref$project_directory, 
+               file_path_ref$sequencing$results$all_dge_results))
+
+
+load(file.path(file_path_ref$project_directory, 
+               file_path_ref$external_data$last250_coordinates))
+
+dge_soma_res <- dge_results$transcript_level$cpn_soma_dpc21_vs_cpn_soma_dpc23 %>%
+  inner_join(coords_last250_collapsed_df, by="Geneid_first")
+
+
+confident_txpt <- (dge_results$transcript_level$gc_vs_gcf %>% 
+                     subset((is_sig.CPN_GC_DPC23.vs.Forebrain_Background & log2FoldChange.CPN_GC_DPC23.vs.Forebrain_Background > 0.5) | (is_sig.CPN_GC_DPC21.vs.Forebrain_Background & log2FoldChange.CPN_GC_DPC21.vs.Forebrain_Background > 0.5)))$Geneid_first
+
+dge_gc_res <- dge_results$transcript_level$cpn_gc_dpc21_vs_cpn_gc_dpc23 %>%
+  inner_join(coords_last250_collapsed_df, by="Geneid_first") %>%
+  subset(Geneid_first %in% confident_txpt)
+
+
+soma_utrs <- biomaRt::getBM(c("ensembl_transcript_id", "3utr"),
+                            filters="ensembl_transcript_id",
+                            values=dge_soma_res$longest_txpt,
+                            mart=grcm38_101) %>%
+  subset(!grepl("S|N", `3utr`) & nchar(`3utr`) > 10)
+
+soma_utr_lst <- soma_utrs$`3utr`
+names(soma_utr_lst) <- soma_utrs$ensembl_transcript_id
+  
+soma_up <- subset(dge_soma_res, padj < 0.05 & log2FoldChange > 0)$longest_txpt
+soma_down <- subset(dge_soma_res, padj < 0.05 & log2FoldChange < 0)$longest_txpt
+
+
+gc_utr_lst <- na.omit(soma_utr_lst[dge_gc_res$longest_txpt])
+gc_up <- subset(dge_gc_res, padj < 0.05 & log2FoldChange > 0)$longest_txpt
+gc_down <- subset(dge_gc_res, padj < 0.05 & log2FoldChange < 0)$longest_txpt
+
+gc_utr_sets <- list(gc_up=na.omit(soma_utr_lst[gc_up]),
+                gc_down=na.omit(soma_utr_lst[gc_down]))
+
+gc_matrix_tsma_res <- run_matrix_tsma(gc_utr_sets, gc_utr_lst)
+
+
+
+```
+
+Run Spectrum Motif Analysis for somata
+```{r}
+
+load(file.path(file_path_ref$project_directory, 
+               file_path_ref$sequencing$results$all_dge_results))
+
+
+
+soma_utrs <- biomaRt::getBM(c("ensembl_transcript_id", "3utr"),
+                            filters="ensembl_transcript_id",
+                            values=dge_soma_res$longest_txpt,
+                            mart=grcm38_101)
+
+soma_utrs_filt <- subset(soma_utrs, nchar(`3utr`) > 10 & !grepl("N|S|s", `3utr`)) %>%
+  inner_join(dge_soma_res, by=c("ensembl_transcript_id" = "longest_txpt")) %>%
+  dplyr::select(c(log2FoldChange, `3utr`, ensembl_transcript_id, padj)) %>%
+  unique() %>%
+  subset(!is.na(padj))
+
+# arrange by log2foldchange
+soma_utrs_filt <- soma_utrs_filt %>% 
+  arrange(log2FoldChange)
+
+soma_utrs_lst <- soma_utrs_filt$`3utr`
+names(soma_utrs_lst) <- soma_utrs_filt$ensembl_transcript_id
+
+library(transite)
+cpn_soma_spma <- run_matrix_spma(soma_utrs_lst)
+
+# plot the AU motifs
+motif_idx <- which(cpn_soma_spma$spectrum_info_df$motif_id == "M055_0.6")
+motif_instances <- data.frame(hits=cpn_soma_spma$background_scores$absolute_hits[[motif_idx]],
+                              ensembl_transcript_id=sapply(names(cpn_soma_spma$background_scores$total_sites[[motif_idx]]), 
+                                                     function(name) strsplit(name, "\\|")[[1]][1])) %>% 
+  inner_join(soma_utrs_filt, by="ensembl_transcript_id") %>%
+  rowwise() %>%
+  mutate(gene_group=ifelse(padj < 0.05 & abs(log2FoldChange) > 1, ifelse(log2FoldChange > 0, "DPC23", "DPC21"), "Neither"))
+
+
+                              
+                              
+                              
+
+```
+
+
+############################ END ####################################################
 ```{}
 #!/bin/bash
 

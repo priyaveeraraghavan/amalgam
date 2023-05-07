@@ -25,6 +25,8 @@
 			"dpc3_cpn_dpc21_cth_gc_comparison": "data/sequencing/differential_expression/dpc23_cpn_vs_dpc21_cth_gc_comparison.RData",
 			"all_dpc23_comparison" : "data/sequencing/differential_expression/all_dpc23_comparison.RData",
 			"gc_vs_soma_dpc23_comparison" : "data/sequencing/differential_expression/gc_vs_soma_dpc23_comparison.RData",
+			"cpn_gc_vs_soma_dpc23_comparison" : "data/sequencing/differential_expression/cpn_gc_vs_soma_dpc23_comparison.RData",
+			"cth_gc_vs_soma_dpc23_comparison" : "data/sequencing/differential_expression/cth_gc_vs_soma_dpc23_comparison.RData",
 			"all_gc_comparison" : "data/sequencing/differential_expression/all_gc_comparison.RData",
 			"cth_gc_comparison": "data/sequencing/differential_expression/cth_gc_comparison.RData",
 			"cpn_gc_comparison": "data/sequencing/differential_expression/cpn_gc_comparison.RData",
@@ -49,7 +51,9 @@
 		"utr3_coordinates" : "data/external_data/ensembl_grcm38_101_utr3_coordinates.RData",
 		"rbms1_irclip" : "data/external_data/Navickas_etal_Rbms1_irCLIP_CancerDiscovery_2020_Table_S1.xlsx",
 		"cxpn_temporal_microarray" : "data/external_data/cxpn_temporal_microarray",
-		"contaminant_marker_genes" : "data/external_data/contaminant_marker_genes.xlsx"
+		"contaminant_marker_genes" : "data/external_data/contaminant_marker_genes.xlsx",
+		"WIRS_motif_supplement" : "data/external_data/WIRS_motif_membrane_protein.NIHMS559691-supplement-02.xlsx",
+		"WAVE_WIRS_Annotation": "data/external_data/WAVE_WIRS_Annotation.xlsx"
 	},
 	"plots" : {
 		"setup_script" : "scripts/plot_scripts/plot_helper.R",

@@ -1,0 +1,585 @@
+---
+title: "figure3"
+author: "Priya Veeraraghavan"
+date: "2023-04-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(biomaRt)
+library(rjson)
+library(readxl)
+library(xlsx)
+```
+
+
+Load all the profiled genes 
+```{r}
+input <- "C:/Users/prv892/Documents/GitHub/amalgam/metadata.json"
+
+file_path_ref <- fromJSON(file = input)
+source(file.path(file_path_ref$project_directory, file_path_ref$sequencing$setup_script))
+source(file.path(file_path_ref$project_directory, file_path_ref$plots$setup_script))
+
+```
+
+```{r}
+get_figure_3_annotation <- function(out_excel) {
+  wirs_motif_df <- read_excel(file.path(file_path_ref$project_directory,
+                                       file_path_ref$external_data$WIRS_motif_supplement),
+                            skip=1)
+
+# get mmuculus ids associated 
+ensembl_musculus <- useEnsembl(biomart = "ensembl", dataset = "mmusculus_gene_ensembl")
+ensembl_hsapiens <- useEnsembl(biomart = "ensembl", dataset="hsapiens_gene_ensembl")
+
+hsapiens_gene2uniprot <- getBM(c("uniprot_gn_id", "ensembl_gene_id"),
+                                filters="uniprot_gn_id",
+                                values=wirs_motif_df$`Uniprot ID`,
+                                mart=ensembl_hsapiens)
+
+hsapiens_gene2homolog <- getBM(c("ensembl_gene_id", "mmusculus_homolog_ensembl_gene", "mmusculus_homolog_associated_gene_name"),
+                               filters="ensembl_gene_id",
+                               values=hsapiens_gene2uniprot$ensembl_gene_id,
+                               mart=ensembl_hsapiens)
+
+mmusculus_gene_df <- hsapiens_gene2uniprot %>% full_join(hsapiens_gene2homolog, by="ensembl_gene_id")
+
+setdiff(wirs_motif_df$`Uniprot ID`, mmusculus_gene_df$uniprot_gn_id)
+
+manually_curated <- data.frame(uniprot_gn_id=c("Q8N2Q7"," Q9HCF6", "P46695"),
+                               mmusculus_homolog_associated_gene_name=c("Nlgn1", "Trpm3", "Ier3"),
+                               ensembl_gene_id=NA,
+                               mmusculus_homolog_ensembl_gene=c("ENSMUSG00000063887", "ENSMUSG00000052387", "ENSMUSG00000003541"))
+
+
+wirs_all <- data.frame(rbind(mmusculus_gene_df, manually_curated))
+
+
+wave_complex_proteins <- data.frame(external_gene_name=c(c("Abi2", "Brk1", "Wasf1", "Cyfip1", "Nckap1"), 
+                                                         c("Wasf2", "Wasf3", "Abi1", "Abi3", "Cyfip2", "Nckap1l"), 
+                                                         c("Wasp", "Wasl", "Wash", "Whamm", "Whimp", "Jmy"),
+                                                         c("Rac1", "Arhgef18", "Prex1", "Tiam1", "Arhgap12", "Arf1", "Arf6", "Rhog", "Cdc42"),
+                                                         c("Actr2", "Actr3")),
+                                    type=c(rep("canonical", 5), rep("alternative", 6), rep("alternative_wave", 6), rep("regulator", 9), rep("downstream", 2))) %>%
+  inner_join(unique(t2g[,c("ensembl_gene_id", "external_gene_name")]))
+
+
+write.xlsx(wirs_all, out_excel, sheetName="WIRS")
+write.xlsx(wave_complex_proteins, out_excel, sheetName="WAVE", append=TRUE)
+
+}
+
+get_figure_3_annotation(file.path(file_path_ref$project_directory,
+                                  file_path_ref$external_data$WAVE_WIRS_Annotation))
+
+```
+
+```{r}
+plot_main_3b <- function(plot_savefile) {
+  
+  # load the dge results
+  load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$all_dge_results))
+  
+  # read the wave proteins
+  wave_protein_df <- read_excel(file.path(file_path_ref$project_directory,
+                                          file_path_ref$external_data$WAVE_WIRS_Annotation),
+                                sheet = "WAVE")
+  
+  wave_res <- wave_protein_df %>% 
+    full_join(dge_results$gene_level$cpn_soma_dpc23_vs_cth_soma_dpc23,
+              by=c("external_gene_name", "ensembl_gene_id")) %>%
+    subset(baseMean > 100)
+  
+  to_plot_annot <- subset(wave_res, !is.na(type)) %>%
+    rowwise() %>%
+    mutate(subtype_group=ifelse(padj < 0.05 & abs(log2FoldChange) > 1,
+                              ifelse(log2FoldChange > 0, "CThPN", "CPN"), 
+                              "Shared"))
+  
+  plt <- rasterize(ggplot(wave_res %>% arrange(desc(padj)), aes(baseMean, log2FoldChange, 
+                       color=padj < 0.05 & abs(log2FoldChange) > 1)) +
+                     geom_point(size=0.5) + 
+    scale_color_manual(values=c(background_color, background_color_dark)), 
+                   dpi=300) + 
+    geom_point(data=subset(to_plot_annot, subtype_group == "CThPN"),
+               mapping=aes(baseMean, log2FoldChange),
+               color=cthpn_color) +
+    geom_point(data=subset(to_plot_annot, subtype_group == "CPN"),
+               mapping=aes(baseMean, log2FoldChange),
+               color=cpn_color) +
+    geom_point(data=subset(to_plot_annot, subtype_group == "Shared"),
+               mapping=aes(baseMean, log2FoldChange),
+               color=accent_color_dark) +
+    geom_text_repel(data=subset(to_plot_annot, subtype_group == "CThPN"),
+               mapping=aes(baseMean, log2FoldChange, label=external_gene_name),
+               color=cthpn_color,
+               min.segment.length = 0,
+               max.overlaps = Inf,
+               size=3) + 
+    geom_text_repel(data=subset(to_plot_annot, subtype_group == "CPN"),
+               mapping=aes(baseMean, log2FoldChange, label=external_gene_name),
+               color=cpn_color,
+               min.segment.length = 0,
+                max.overlaps = Inf,
+               size=3) + 
+    geom_text_repel(data=subset(to_plot_annot, subtype_group == "Shared"),
+               mapping=aes(baseMean, log2FoldChange, label=external_gene_name),
+               color=accent_color_dark,
+               min.segment.length = 0,
+                max.overlaps = Inf,
+               size=3) + 
+    theme_classic() +
+    theme(legend.position="None", text=element_text(size=7)) +
+    scale_x_log10() +
+    ylim(-6, 6) +
+    xlab("Normalized Counts") +
+    ylab("Log2 Fold Change CThPN Soma/CPN Soma DPC23") +
+    geom_hline(yintercept=0, linetype="dashed", color=background_color_dark, linewidth=0.5)
+  
+  ggsave(filename = plot_savefile, 
+         plot = plt,
+         device = "pdf",
+         height = 42*2.5,
+         width = 45*2.5 ,
+         units = "mm",
+         useDingbats=FALSE)
+
+}
+
+plot_main_3b(file.path(file_path_ref$project_directory,
+                       file_path_ref$plots$plot_directory,
+                       "main_3b.pdf"))
+```
+
+```{r}
+plot_main_3c <- function(plot_savefile) {
+  
+  # load the dge results
+  load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$all_dge_results))
+  
+  # read the wave proteins
+  wave_protein_df <- read_excel(file.path(file_path_ref$project_directory,
+                                          file_path_ref$external_data$WAVE_WIRS_Annotation),
+                                sheet = "WAVE")
+  
+  wave_res <- wave_protein_df %>% 
+    full_join(dge_results$gene_level$cpn_gc_dpc23_vs_cth_gc_dpc23,
+              by=c("external_gene_name", "ensembl_gene_id")) %>%
+    subset((is_cpn_over_input | is_cth_over_input))
+  
+  to_plot_annot <- subset(wave_res, !is.na(type)) %>%
+    rowwise() %>%
+    mutate(subtype_group=ifelse(is_cpn_subtype_gc & is_cpn_over_input & !is_forebrain_gcf,
+                                "CPN", 
+                                ifelse(is_cth_subtype_gc & is_cth_over_input & !is_thalamus_gcf,
+                                       "CThPN", "Shared")))
+  
+  plt <- rasterize(ggplot(wave_res %>% arrange(desc(padj)), aes(baseMean, log2FoldChange, 
+                       color=padj < 0.05 )) +
+                     geom_point(size=0.5) + 
+    scale_color_manual(values=c(background_color, background_color_dark)), 
+                   dpi=300) + 
+    geom_point(data=subset(to_plot_annot, subtype_group == "CThPN"),
+               mapping=aes(baseMean, log2FoldChange),
+               color=cthpn_color) +
+    geom_point(data=subset(to_plot_annot, subtype_group == "CPN"),
+               mapping=aes(baseMean, log2FoldChange),
+               color=cpn_color) +
+    geom_point(data=subset(to_plot_annot, subtype_group == "Shared"),
+               mapping=aes(baseMean, log2FoldChange),
+               color=accent_color_dark) +
+    geom_text_repel(data=subset(to_plot_annot, subtype_group == "CThPN"),
+               mapping=aes(baseMean, log2FoldChange, label=external_gene_name),
+               color=cthpn_color,
+               min.segment.length = 0,
+               max.overlaps = Inf,
+               size=3) + 
+    geom_text_repel(data=subset(to_plot_annot, subtype_group == "CPN"),
+               mapping=aes(baseMean, log2FoldChange, label=external_gene_name),
+               color=cpn_color,
+               min.segment.length = 0,
+                max.overlaps = Inf,
+               size=3) + 
+    geom_text_repel(data=subset(to_plot_annot, subtype_group == "Shared"),
+               mapping=aes(baseMean, log2FoldChange, label=external_gene_name),
+               color=accent_color_dark,
+               min.segment.length = 0,
+                max.overlaps = Inf,
+               size=3) + 
+    theme_classic() +
+    theme(legend.position="None", text=element_text(size=7)) +
+    scale_x_log10() +
+    xlab("Normalized Counts") +
+    ylab("Log2 Fold Change CThPN GC/CPN GC DPC23") +
+    geom_hline(yintercept=0, linetype="dashed", color=background_color_dark, linewidth=0.5)
+  
+  ggsave(filename = plot_savefile, 
+         plot = plt,
+         device = "pdf",
+         height = 42*2.5,
+         width = 45*2.5 ,
+         units = "mm",
+         useDingbats=FALSE)
+
+}
+
+plot_main_3c(file.path(file_path_ref$project_directory,
+                       file_path_ref$plots$plot_directory,
+                       "main_3c.pdf"))
+```
+```{r}
+plot_main_3d <- function(plot_savefile) {
+   
+  # load the dge results
+  load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$all_dge_results))
+  
+  gc_soma_res <- dge_results$gene_level$cpn_gc_dpc23_vs_cth_gc_dpc23 %>%
+    inner_join(dge_results$gene_level$cpn_soma_dpc23_vs_cth_soma_dpc23,
+               by=c("ensembl_gene_id", "external_gene_name"),
+               suffix=c(".gc", ".soma"))
+  
+  # read the wirs proteins
+  wirs_res <- read_excel(file.path(file_path_ref$project_directory,
+                                          file_path_ref$external_data$WAVE_WIRS_Annotation),
+                                sheet = "WIRS") %>%
+    full_join(gc_soma_res,
+              by=c("mmusculus_homolog_ensembl_gene" = "ensembl_gene_id")) %>%
+    subset((is_cpn_over_input | is_cth_over_input))
+  
+  
+   to_plot_annot <- wirs_res %>%
+     subset(!is.na(uniprot_gn_id)) %>%
+     rowwise() %>%
+    mutate(subtype_group=ifelse(is_cpn_subtype_gc & is_cpn_over_input, # & !is_forebrain_gcf,
+                                "CPN", 
+                                ifelse(is_cth_subtype_gc & is_cth_over_input , #& !is_thalamus_gcf,
+                                       "CThPN", "Shared")))
+  
+  plt <- rasterize(ggplot(wirs_res %>% arrange(desc(padj.gc)), aes(log2FoldChange.gc, log2FoldChange.soma, color=padj.gc < 0.05, shape=padj.soma < 0.05)) +
+                     geom_point(size=0.5) +
+                     scale_color_manual(values=c(background_color, background_color_dark)),
+                   dpi=300) + 
+    geom_point(data=subset(to_plot_annot, subtype_group == "CThPN"),
+               mapping=aes(log2FoldChange.gc, log2FoldChange.soma),
+               color=cthpn_color) +
+    geom_point(data=subset(to_plot_annot, subtype_group == "CPN"),
+               mapping=aes(log2FoldChange.gc, log2FoldChange.soma),
+               color=cpn_color) +
+    geom_point(data=subset(to_plot_annot, subtype_group == "Shared"),
+               mapping=aes(log2FoldChange.gc, log2FoldChange.soma),
+               color=accent_color_dark) +
+    geom_text_repel(data=subset(to_plot_annot, subtype_group == "CThPN"),
+               mapping=aes(log2FoldChange.gc, log2FoldChange.soma, label=external_gene_name),
+               color=cthpn_color,
+               min.segment.length = 0,
+               max.overlaps = Inf,
+               size=3) + 
+    geom_text_repel(data=subset(to_plot_annot, subtype_group == "CPN"),
+               mapping=aes(log2FoldChange.gc, log2FoldChange.soma, label=external_gene_name),
+               color=cpn_color,
+               min.segment.length = 0,
+                max.overlaps = Inf,
+               size=3) + 
+    geom_text_repel(data=subset(to_plot_annot, subtype_group == "Shared"),
+               mapping=aes(log2FoldChange.gc, log2FoldChange.soma, label=external_gene_name),
+               color=accent_color_dark,
+               min.segment.length = 0,
+                max.overlaps = Inf,
+               size=3) + 
+    theme_classic() +
+    theme(legend.position="None", text=element_text(size=7)) +
+    ylab("Log2 Fold Change CThPN Soma/CPN Soma DPC23") +
+    xlab("Log2 Fold Change CThPN GC/CPN GC DPC23") +
+    geom_hline(yintercept=0, linetype="dashed", color=background_color_dark, linewidth=0.5) +
+    geom_vline(xintercept=0, linetype="dashed", color=background_color_dark, linewidth=0.5) +
+    ylim(-6,6)
+
+  
+   ggsave(file=plot_savefile, 
+          plot=plt,
+          device="pdf",
+          height=50*2,
+          width=63*2,
+          units="mm")
+  
+ 
+}
+
+plot_main_3d(file.path(file_path_ref$project_directory, 
+                       file_path_ref$plots$plot_directory,
+                       "main_3d.pdf"))
+```
+
+```{r}
+plot_main_3d_soma_MA <- function(plot_savefile) {
+  
+   # load the dge results
+  load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$all_dge_results))
+  
+  
+  # read the wirs proteins
+  wirs_res <- read_excel(file.path(file_path_ref$project_directory,
+                                          file_path_ref$external_data$WAVE_WIRS_Annotation),
+                                sheet = "WIRS") %>%
+    full_join(dge_results$gene_level$cpn_soma_dpc23_vs_cth_soma_dpc23,
+              by=c("mmusculus_homolog_ensembl_gene" = "ensembl_gene_id")) 
+  
+   to_plot_annot <- wirs_res %>%
+     subset(!is.na(uniprot_gn_id)) %>%
+      rowwise() %>%
+    mutate(subtype_group=ifelse(padj < 0.05 & abs(log2FoldChange) > 1,
+                              ifelse(log2FoldChange > 0, "CThPN", "CPN"), 
+                              "Shared"))
+   
+  plt <- rasterize(ggplot(wirs_res %>% arrange(desc(padj)), 
+                          aes(baseMean, log2FoldChange, 
+                              color=padj < 0.05 & abs(log2FoldChange) > 1)) +
+                     geom_point(size=0.5) +
+                     scale_color_manual(values=c(background_color, background_color_dark)),
+                   dpi=300) + 
+    geom_point(data=subset(to_plot_annot, subtype_group == "CThPN"),
+               mapping=aes(baseMean, log2FoldChange),
+               color=cthpn_color) +
+    geom_point(data=subset(to_plot_annot, subtype_group == "CPN"),
+               mapping=aes(baseMean, log2FoldChange),
+               color=cpn_color) +
+    geom_point(data=subset(to_plot_annot, subtype_group == "Shared"),
+               mapping=aes(baseMean, log2FoldChange),
+               color=accent_color_dark) +
+    geom_text_repel(data=subset(to_plot_annot, subtype_group == "CThPN"),
+               mapping=aes(baseMean, log2FoldChange, label=external_gene_name),
+               color=cthpn_color,
+               min.segment.length = 0,
+               max.overlaps = Inf,
+               size=3) + 
+    geom_text_repel(data=subset(to_plot_annot, subtype_group == "CPN"),
+               mapping=aes(baseMean, log2FoldChange, label=external_gene_name),
+               color=cpn_color,
+               min.segment.length = 0,
+                max.overlaps = Inf,
+               size=3) +
+    theme_classic() +
+    scale_x_log10() +
+    theme(legend.position="None", text=element_text(size=7)) +
+    ylab("Log2 Fold Change CThPN Soma/CPN Soma DPC23") +
+    xlab("Normalized Counts") +
+    geom_hline(yintercept=0, linetype="dashed", color=background_color_dark, linewidth=0.5) +
+    ylim(-6,6)
+
+  
+   ggsave(file=plot_savefile, 
+          plot=plt,
+          device="pdf",
+          height=50*2,
+          width=63*2,
+          units="mm")
+}
+plot_main_3d_soma_MA(file.path(file_path_ref$project_directory, 
+                       file_path_ref$plots$plot_directory,
+                       "main_3d_soma_ma.pdf"))
+
+
+```
+ 
+  # read the wave proteins
+  wave_protein_df <- read_excel(file.path(file_path_ref$project_directory,
+                                          file_path_ref$external_data$WAVE_WIRS_Annotation),
+                                sheet = "WAVE")
+  
+  wave_res <- wave_protein_df %>% 
+    full_join(dge_results$gene_level$cpn_gc_dpc23_vs_cth_gc_dpc23,
+              by=c("external_gene_name", "ensembl_gene_id")) %>%
+    subset((is_cpn_over_input | is_cth_over_input))
+  
+```{r}
+plot_supplement_5ab_6ab <- function(plot_saveprefix) {
+  
+     # load the dge results
+  load(file.path(file_path_ref$project_directory, 
+                 file_path_ref$sequencing$results$all_dge_results))
+  
+  
+
+  for (annotation in c("WAVE", "WIRS")) {
+     if (annotation == "WAVE") {
+       db_annot_df <- read_excel(file.path(file_path_ref$project_directory,
+                                          file_path_ref$external_data$WAVE_WIRS_Annotation),
+                                sheet = "WAVE") %>%
+         rowwise() %>% 
+         mutate(is_db_group=TRUE) %>%
+         dplyr::select(ensembl_gene_id, is_db_group)
+       prefix <- sprintf("%s_5ab", plot_saveprefix)
+  
+     } else {
+       db_annot_df <- read_excel(file.path(file_path_ref$project_directory,
+                                          file_path_ref$external_data$WAVE_WIRS_Annotation),
+                                sheet = "WIRS") %>%
+         dplyr::select(-ensembl_gene_id) %>%
+         dplyr::rename(ensembl_gene_id=mmusculus_homolog_ensembl_gene) %>%
+         rowwise() %>%
+         mutate(is_db_group=TRUE) %>%
+         dplyr::select(ensembl_gene_id, is_db_group)
+       
+        prefix <- sprintf("%s_6ab", plot_saveprefix)
+
+  
+     }
+  
+  for (subtype in c("CPN", "CThPN")) {
+    
+    if (subtype == "CPN") {
+      dge_df <- dge_results$gene_level$cpn_gc_dpc23_vs_cpn_soma_dpc23
+      colors <- c(soma=cpn_color_scale[4], shared=cpn_color_scale[3], gc=cpn_color_scale[2])
+    } else {
+      dge_df <- dge_results$gene_level$cth_gc_dpc23_vs_cth_soma_dpc23
+      colors <- c(soma=cthpn_color_scale[4], shared=cthpn_color_scale[3], gc=cthpn_color_scale[2])
+
+
+    }
+    
+    df_toplot <- db_annot_df %>%
+        full_join(dge_df,
+              by= "ensembl_gene_id") %>%
+        subset(is_valid_gc) %>% 
+      rowwise() %>%
+      mutate(neg_log10_padj=-log10(padj))
+
+    
+    to_plot_annot <-df_toplot %>%
+     subset(is_db_group) %>%
+      rowwise() %>%
+    mutate(location_group=ifelse(padj < 0.05 & abs(log2FoldChange) > 1,
+                              ifelse(log2FoldChange > 0, "GC_Enriched", "Soma_Enriched"), 
+                              "Shared"))
+    
+    for (plot_type in c("MA", "volcano")) {
+      
+      if (plot_type == "MA") {
+        x_var <- "baseMean"
+        y_var <- "log2FoldChange"
+      } else {
+        x_var <- "log2FoldChange"
+        y_var <- "neg_log10_padj"
+        
+      }
+   
+  plt <- rasterize(ggplot(df_toplot %>% arrange(desc(padj)), 
+                          aes(.data[[x_var]], .data[[y_var]], 
+                              color=padj < 0.05 & abs(log2FoldChange) > 1)) +
+                     geom_point(size=0.5) +
+                     scale_color_manual(values=c(background_color, background_color_dark)),
+                   dpi=300) + 
+    geom_point(data=subset(to_plot_annot, location_group == "GC_Enriched"),
+               mapping=aes(.data[[x_var]], .data[[y_var]]),
+               color=colors["gc"]) +
+    geom_point(data=subset(to_plot_annot, location_group == "Soma_Enriched"),
+               mapping=aes(.data[[x_var]], .data[[y_var]]),
+               color=colors["soma"]) +
+    geom_point(data=subset(to_plot_annot, location_group == "Shared"),
+               mapping=aes(.data[[x_var]], .data[[y_var]]),
+               color=colors["shared"]) +
+    geom_text_repel(data=subset(to_plot_annot, location_group == "GC_Enriched"),
+               mapping=aes(.data[[x_var]], .data[[y_var]], label=external_gene_name),
+               color=colors["gc"],
+               min.segment.length = 0,
+               max.overlaps = Inf,
+               size=3) + 
+    geom_text_repel(data=subset(to_plot_annot, location_group == "Soma_Enriched"),
+               mapping=aes(.data[[x_var]], .data[[y_var]], label=external_gene_name),
+               color=colors["soma"],
+               min.segment.length = 0,
+                max.overlaps = Inf,
+               size=3) +
+     geom_text_repel(data=subset(to_plot_annot, location_group == "Shared"),
+               mapping=aes(.data[[x_var]], .data[[y_var]], label=external_gene_name),
+               color=colors["shared"],
+               min.segment.length = 0,
+                max.overlaps = Inf,
+               size=3) +
+    theme_classic() +
+    theme(legend.position="None", text=element_text(size=7)) 
+  
+  if (plot_type == "MA") {
+    plt <- plt + 
+      scale_x_log10() +
+      ylab(sprintf("Log2 Fold Change %s GC/%s Soma DPC23", subtype, subtype)) +
+      xlab("Normalized Counts") +
+      geom_hline(yintercept=0, linetype="dashed", color=background_color_dark, linewidth=0.5) 
+    
+  } else {
+    plt <- plt +
+      ylab("-log10(padj)") +
+      xlab(sprintf("Log2 Fold Change %s GC/%s Soma DPC23", subtype, subtype)) + 
+      geom_hline(yintercept=-log10(0.05), linetype="dashed", color=background_color_dark, linewidth=0.5) 
+
+  }
+   
+    
+   ggsave(file=sprintf("%s_%s_%s_%s.pdf", prefix, annotation, subtype, plot_type),
+          plot=plt,
+          device="pdf",
+          height=45*2,
+          width=47*2,
+          units="mm")
+    
+    
+  }
+  }
+  }
+  
+}
+
+plot_supplement_5ab_6ab(file.path(file_path_ref$project_directory,
+                              file_path_ref$plots$plot_directory,
+                              "supplement"))
+```
+
+ plt <- rasterize(ggplot(wirs_toplot %>% arrange(desc(padj)), 
+                          aes(baseMean, log2FoldChange, 
+                              color=padj < 0.05 & abs(log2FoldChange) > 1)) +
+                     geom_point(size=0.5) +
+                     scale_color_manual(values=c(background_color, background_color_dark)),
+                   dpi=300) + 
+    geom_point(data=subset(to_plot_annot, location_group == "GC_Enriched"),
+               mapping=aes(baseMean, log2FoldChange),
+               color=colors["gc"]) +
+    geom_point(data=subset(to_plot_annot, location_group == "Soma_Enriched"),
+               mapping=aes(baseMean, log2FoldChange),
+               color=colors["soma"]) +
+    geom_point(data=subset(to_plot_annot, location_group == "Shared"),
+               mapping=aes(baseMean, log2FoldChange),
+               color=colors["shared"]) +
+    geom_text_repel(data=subset(to_plot_annot, location_group == "GC_Enriched"),
+               mapping=aes(baseMean, log2FoldChange, label=external_gene_name),
+               color=colors["gc"],
+               min.segment.length = 0,
+               max.overlaps = Inf,
+               size=3) + 
+    geom_text_repel(data=subset(to_plot_annot, location_group == "Soma_Enriched"),
+               mapping=aes(baseMean, log2FoldChange, label=external_gene_name),
+               color=colors["soma"],
+               min.segment.length = 0,
+                max.overlaps = Inf,
+               size=3) +
+     geom_text_repel(data=subset(to_plot_annot, location_group == "Shared"),
+               mapping=aes(baseMean, log2FoldChange, label=external_gene_name),
+               color=colors["shared"],
+               min.segment.length = 0,
+                max.overlaps = Inf,
+               size=3) +
+    theme_classic() +
+    scale_x_log10() +
+    theme(legend.position="None", text=element_text(size=7)) +
+    ylab(sprintf("Log2 Fold Change %s GC/%s Soma DPC23", subtype, subtype)) +
+    xlab("Normalized Counts") +
+    geom_hline(yintercept=0, linetype="dashed", color=background_color_dark, linewidth=0.5) 
+    

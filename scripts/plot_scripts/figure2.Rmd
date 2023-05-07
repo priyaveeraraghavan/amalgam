@@ -44,18 +44,18 @@ plot_main_2a <- function(plot_savefile) {
              (is_cpn_subtype_gc & is_cpn_over_input & is_thalamus_gcf) |
              (is_cth_subtype_gc & is_cth_over_input & is_forebrain_gcf))
   
-  res_gc_tolabel <- subset(res_gc_toplot, padj < 1e-6)
+  res_gc_tolabel <- subset(res_gc_toplot,  padj < 1e-6)
   
   plt <- rasterize(ggplot(res_gc_toplot, 
          aes(log2FoldChange, -log10(padj))) +
     geom_point(color=background_color, 
                size=0.5) +
       theme_classic(), dpi=300) +
-    rasterize(geom_point(data=subset(res_gc_toplot, is_cpn_subtype_gc),
+    rasterize(geom_point(data=subset(res_gc_toplot, is_cpn_subtype_gc & is_cpn_over_input & !is_forebrain_gcf),
                mapping=aes(log2FoldChange, -log10(padj)),
                color=cpn_color,
                size=0.5), dpi=300) +
-    rasterize(geom_point(data=subset(res_gc_toplot, is_cth_subtype_gc),
+    rasterize(geom_point(data=subset(res_gc_toplot, is_cth_subtype_gc & is_cth_over_input & !is_thalamus_gcf),
                mapping=aes(log2FoldChange, -log10(padj)),
                color=cthpn_color,
                size=0.5), dpi=300) +
@@ -73,6 +73,13 @@ plot_main_2a <- function(plot_savefile) {
          plot=plt, device="pdf",
          width=52, height=48, units="mm", useDingbats=FALSE)
 
+   # get numbers for venn diagram
+   num_cpn_specific <- res_gc_toplot %>% subset(is_cpn_subtype_gc & is_cpn_over_input & !is_forebrain_gcf) %>% nrow()
+   num_cth_specific <- res_gc_toplot %>% subset(is_cth_subtype_gc & is_cth_over_input & !is_thalamus_gcf) %>% nrow()
+   num_shared <- res_gc_toplot %>% subset(!is_cpn_subtype_gc & !is_cth_subtype_gc) %>% nrow()
+   
+   print(sprintf("Number CPN specific: %s\nNumber CThPN specific: %s\nNumber Shared: %s",
+                 num_cpn_specific, num_cth_specific, num_shared))
 }
 
 plot_main_2a(file.path(file_path_ref$project_directory,
@@ -97,8 +104,8 @@ plot_main_2b <- function(plot_savefile) {
              (is_cpn_subtype_gc & is_cpn_over_input & is_thalamus_gcf) |
              (is_cth_subtype_gc & is_cth_over_input & is_forebrain_gcf)) %>%
     rowwise() %>%
-    mutate(gc_subtype=ifelse(is_cpn_subtype_gc, "CPN", 
-                             ifelse(is_cth_subtype_gc, "CTh", "Shared")))
+    mutate(gc_subtype=ifelse(is_cpn_subtype_gc & is_cpn_over_input & !is_forebrain_gcf, "CPN", 
+                             ifelse(is_cth_subtype_gc & is_cth_over_input & !is_thalamus_gcf, "CTh", "Shared")))
   
   # soma dge data in dge_res
   load(file.path(file_path_ref$project_directory, 
@@ -135,7 +142,6 @@ plot_main_2b <- function(plot_savefile) {
 
     
 
-  
 }
 
 plot_main_2b(file.path(file_path_ref$project_directory,

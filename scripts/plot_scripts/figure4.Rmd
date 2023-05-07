@@ -74,7 +74,7 @@ collapse_rbps_motif <- function(enrichment_df) {
 }
 
 plot_main_4b <- function(plot_savefile) {
-  load(file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$dpc23_cpn_cth_gc_vs_soma_utr_motifs))
+  load(file.path(file_path_ref$project_directory, file_path_ref$sequencing$results$gc_vs_soma_utr_motifs)) #dpc23_cpn_cth_gc_vs_soma_utr_motifs))
   
   cpn_enrichment <- collapse_rbps_motif(cpn_utr_enrichment)
   cth_enrichment <- collapse_rbps_motif(cth_utr_enrichment)
@@ -85,9 +85,13 @@ plot_main_4b <- function(plot_savefile) {
     mutate(enrichment_type=ifelse(padj.cpn < 0.05 & mean_enrichment.cpn > 1,
                                   ifelse(padj.cth < 0.05 & mean_enrichment.cth > 1, 
                                          "Both Enriched","CPN Enriched"),
-                                  "Neither Enriched"))
+                                  "Neither Enriched")) %>%
+    rowwise() %>%
+    mutate(motif_rbps=gsub("BRUNOL", "CELF", ifelse(motif_rbps=="A2BP1", "RBFOX1", motif_rbps)))
   
-  both_enrichment_labels <- subset(both_enrichment, motif_rbps %in% c("RALY", "CPEB4", "TIA1", "SFPQ", "QKI", "FMRP", "FMR1", "FXR1", "FXR2", "IGF2BP1", "IGF2BP2", "IGF2BP3", "PUM1", "PUM2"))
+  both_enrichment_labels <-  subset(both_enrichment, motif_rbps %in% c("RBFOX1", "ANKRD17", "CELF2", "CELF4", "CELF6", "CPEB4", "ELAVL2", "ELAVL3", "FMR1", "G3BP2", "HNRNPF", "HNRNPH2", "HNRNPR", "KHDRBS2", "NOVA2", "PABPC1", "PTBP2", "SYNCRIP", "hnRNPK"))
+    
+   # subset(both_enrichment, motif_rbps %in% c("RALY", "CPEB4", "TIA1", "SFPQ", "QKI", "FMRP", "FMR1", "FXR1", "FXR2", "IGF2BP1", "IGF2BP2", "IGF2BP3", "PUM1", "PUM2"))
   
  plt <-  rasterize(ggplot(both_enrichment, aes(mean_enrichment.cpn, mean_enrichment.cth, color=enrichment_type)) + 
     geom_point() +
@@ -164,6 +168,29 @@ plot_main_4c <- function(plot_savefile) {
 
 plot_main_4c(file.path(file_path_ref$project_directory, file_path_ref$plots$plot_directory, "main_4c.pdf"))
 ```
+Run STREME to find de novo motifs
+```{}
+#!/bin/bash
+
+#SBATCH -p shared
+#!/bin/bash
+
+#SBATCH -p shared
+#SBATCH -t 0-20:00:00
+#SBATCH --mem=20G
+#SBATCH -o run_meme_dpc23_cpn.out
+#SBATCH -e run_meme_dpc23_cpn.err
+
+set +eu
+source activate rnaseq_env_current
+
+gc_fasta=CPN_GC_3utr.fa
+bkg_fasta=CPN_Soma_3utr.fa
+outdir=20230415_streme_CPN_GC_DPC23
+streme --oc $outdir --objfun de --n $bkg_fasta --rna --align right --p $gc_fasta
+
+```
+
 Look at how many matching hexamers per utr
 Appears that the cthpn gc utrs have the most pattern calls per utr
 and that for the paterns probably the ones with most contiguous t's have the most calls.
