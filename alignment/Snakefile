@@ -1,0 +1,390 @@
+import glob
+import itertools
+configfile: "config.yaml"
+workdir: config["workdir"]
+
+
+rule all:
+   input:
+      "multiqc_report.html"
+
+
+################################
+###### MULTIQC VISUALIZE #######
+################################
+
+rule run_multiqc:
+   input:
+      expand("qualimap_rnaseq/{sample}/qualimapReport.html", sample=config["samples"]),
+      expand("rseqc/inner_distance/{sample}.inner_distance_freq.txt", sample=config["samples"]),
+      expand("rseqc/bam_stat/{sample}.bam_stat.txt", sample=config["samples"]),
+      expand("gatk_markdup/{sample}.Aligned.markdup.bam", sample=config["samples"]),
+      expand("salmon_align/{sample}/quant.sf", sample=config["samples"]),
+      expand("salmon/{sample}/quant.sf", sample=config["samples"])
+   params:
+      environment=config["multiqc"]["environment"]
+   output:
+      "multiqc_report.html"
+   log:
+      "logs/multiqc_all_samples.log"
+   resources:
+      time_min=30,
+      memory_mb=3000,
+      cores=1
+   shell:
+      """
+      multiqc -dd 4 \
+              qualimap_rnaseq/*/* \
+              rseqc/*/*.inner_distance_freq.txt \
+              rseqc/*/*.bam_stat.txt \
+              salmon/*/aux_info/meta_info.json \
+              salmon/*/libParams/flenDist.txt \
+              star_align/*Log.final.out \
+              salmon_align/*/aux_info/meta_info.json \
+              salmon_align/*/libParams/flenDist.txt \
+              gatk_markdup/*.marked_dup_metrics.txt \
+              trimgalore/*_trimming_report.txt
+              &> {log}
+     """
+
+#################################################################
+########### Gene-level quantification ###########################
+#################################################################    
+rule align_plasmid_features:
+   input:
+      mate1="trimgalore/{sample}_val_1.fq.gz",
+      mate2="trimgalore/{sample}_val_2.fq.gz"
+   params:
+      index=config["bowtie2"]["index"]
+   output:
+      "plasmid_features/{sample}.alignedonly.sam"
+   log:
+      "logs/{sample}_align_plasmid_features.log"
+   resources:
+      cores=2,
+      memory_mb=3000,
+      time_min=90
+   shell:
+      """
+      mkdir -p $(dirname {output})
+      bowtie2 --no-unal -x {params.index} -1 {input.mate1} -2 {input.mate2} -S {output}
+      """
+
+# pseudoalign and quantify reads using salmon
+rule salmon_quant:
+   input:
+      mate1="bbsplit/{sample}.clean_R1.fastq",
+      mate2="bbsplit/{sample}.clean_R2.fastq"
+   params:
+      index=config["salmon"]["index"],
+      environment=config["salmon"]["environment"],
+      libtype="A",
+      outdir="salmon/{sample}",
+      gtfs=config["gtfs"]["transcriptome"]
+   output:
+      "salmon/{sample}/quant.sf"
+   log:
+      "logs/{sample}_salmon_quant.log"
+   resources:
+      cores=4,
+      memory_mb=20000,
+      time_min=90
+   shell:
+      """
+      salmon quant -i {params.index} \
+      -p 16 --libType {params.libtype} \
+      -1 {input.mate1} -2 {input.mate2} \
+      --validateMappings -o {params.outdir} \
+      --numBootstraps 100 &> {log}
+      """
+
+# quantify transcripts using STAR pre-aligned reads
+# do this because 3' bias substantially impacts
+# pseudoaligner performance 
+rule salmon_quant_align:
+   input:
+      "star_align/{sample}.Aligned.toTranscriptome.out.bam"
+   params:
+      environment=config["salmon"]["environment"],
+      libtype="A",
+      outdir="salmon_align/{sample}",
+      gtfs=config["gtfs"]["transcriptome"],
+      fasta=config["fastas"]["transcriptome"]
+   output:
+      "salmon_align/{sample}/quant.sf"
+   log:
+      "logs/{sample}_salmon_align_quant.log"
+   resources:
+      cores=4,
+      memory_mb=20000,
+      time_min=150
+   shell:
+      """
+      salmon quant -p 16 --libType {params.libtype} \
+      --alignments {input} \
+      --targets {params.fasta} \
+      --posBias \
+      --geneMap {params.gtfs} \
+      --numBootstraps 100 \
+      -o {params.outdir} &> {log}
+      """
+
+
+#################################
+###### QC POST-ALIGNMENT ########
+#################################
+
+rule rseqc_inner_distance:
+   input:
+      "star_align/{sample}.Aligned.sorted.bam"
+   params:
+      environment=config["rseqc"]["environment"],
+      bed12=config["beds"]["genes_bed12"],
+      outprefix="rseqc/inner_distance/{sample}"
+   output:
+      "rseqc/inner_distance/{sample}.inner_distance_freq.txt"
+   log:
+      "logs/{sample}_rseqc_inner_distance.log"
+   resources:
+      cores=1,
+      memory_mb=4000,
+      time_min=60
+   shell:
+      """
+      inner_distance.py -i {input} -o {params.outprefix} -r {params.bed12} &> {log}
+      """
+
+rule rseqc_read_distribution:
+   input:
+      "star_align/{sample}.Aligned.sorted.bam"
+   params:
+      environment=config["rseqc"]["environment"],
+      bed12=config["beds"]["genes_bed12"],
+      outprefix="rseqc/read_distribution/{sample}"
+   output:
+      "rseqc/read_distribution/{sample}.read_distribution.txt"
+   log:
+      "logs/{sample}_rseqc_read_distribution.log"
+   resources:
+      cores=1,
+      memory_mb=5000,
+      time_min=90
+   shell:
+      """
+      mkdir -p $(dirname {output})
+
+      read_distribution.py -i {input} -r {params.bed12} > {output} 2> {log}
+      """
+
+# Step 7: Get bam statistics
+rule rseqc_bam_stat:
+   input:
+      "star_align/{sample}.Aligned.sorted.bam"
+   params:
+      environment=config["rseqc"]["environment"]
+   output:
+      "rseqc/bam_stat/{sample}.bam_stat.txt"
+   log:
+      "logs/{sample}_rseqc_bam_stat.log"
+   resources:
+      cores=1,
+      memory_mb=4000,
+      time_min=60
+   shell:
+      """
+      mkdir -p $(dirname {output})
+
+      bam_stat.py -i {input} -q 30 > {output} 2> {log}
+      """
+
+# Step 6: Mark duplicates with gatk
+rule gatk_mark_duplicates:
+   input:
+      "star_align/{sample}.Aligned.sorted.bam"
+   params:
+      environment=config["gatk"]["environment"]
+   output:
+      bam="gatk_markdup/{sample}.Aligned.markdup.bam",
+      marked_dup_metrics="gatk_markdup/{sample}.marked_dup_metrics.txt"
+   log:
+      "logs/{sample}_gatk_mark_duplicates.log"
+   resources:
+      cores=4,
+      memory_mb=8000,
+      time_min=80
+   shell:
+      """
+      mkdir -p $(dirname {output.bam})
+      gatk MarkDuplicates \
+           -I {input} \
+           -O {output.bam} \
+           -M {output.marked_dup_metrics} &> {log}
+      """
+
+# Step 5: Qualimap look at gene body coverage among other things
+# used to use rseqc genebody_coverage but it's really slow https://github.com/nf-core/rnaseq/issues/195
+rule qualimap_rnaseq:
+   input:
+      bam="star_align/{sample}.Aligned.sorted.bam"
+   params:
+      environment=config["qualimap"]["environment"],
+      outprefix="qualimap_rnaseq/{sample}/",
+      tmpdir="qualimap_rnaseq/{sample}/tmp",
+      gtf=config["gtfs"]["transcriptome"],
+      strandedness='non-strand-specific',
+   output:
+      "qualimap_rnaseq/{sample}/qualimapReport.html"
+   log:
+      "logs/{sample}_qualimap_rnaseq.log"
+   resources:
+      cores=1,
+      memory_mb=10000,
+      time_min=80
+   shell:
+      """
+      mkdir -p $(dirname {params.outprefix})
+
+      # set temporary directory otherwise java writing to home directory
+      mkdir {params.tmpdir}
+      export _JAVA_OPTIONS=-Djava.io.tmpdir={params.tmpdir}
+      
+      qualimap rnaseq --java-mem-size=8000M \
+                      --paired \
+                      -bam {input} -gtf {params.gtf} \
+                      -outdir {params.outprefix} -outformat HTML  &> {log}
+      """
+
+
+##################################
+######   ALIGNMENT    ############
+##################################
+rule samtools_sort:
+   input:
+      "star_align/{sample}.Aligned.out.bam"
+   params:
+      environment=config["samtools"]["environment"]
+   output:
+      "star_align/{sample}.Aligned.sorted.bam"
+   log:
+      "logs/{sample}_samtools_sort.log"
+   resources:
+      cores=4,
+      memory_mb=20000,
+      time_min=60
+   shell:
+      """
+      set +eu
+      source activate {params.environment}
+
+      samtools sort -@ {resources.cores} -O BAM -o {output} {input}
+      samtools index {output}
+      """
+
+
+# STAR alignment
+# For multi-mappers only output one sam entry, but the NH:i tag will still contain
+# info on the number of times the read maps to multiple locations
+rule star_align:
+   input:
+      mate1="bbsplit/{sample}.clean_R1.fastq",
+      mate2="bbsplit/{sample}.clean_R2.fastq"
+   params:
+      environment=config["star"]["environment"],
+      genome_reference=config["star"]["index"],
+      gtf_reference=config["gtfs"]["transcriptome"],
+      outprefix="star_align/{sample}."
+   output:
+      genome="star_align/{sample}.Aligned.out.bam",
+      transcriptome="star_align/{sample}.Aligned.toTranscriptome.out.bam"
+   log:
+      "logs/{sample}_star_align.log"
+   resources:
+      cores=8,
+      threads_per_core=1,
+      memory_mb=35000,
+      time_min=90
+   shell:
+      """
+      set +eu
+      source activate {params.environment}
+      STAR --genomeDir {params.genome_reference} --runThreadN 8 \
+           --readFilesIn {input.mate1} {input.mate2} \
+           --sjdbGTFfile {params.gtf_reference} --sjdbOverhang 99 \
+           --outFileNamePrefix {params.outprefix} \
+           --outSAMtype BAM Unsorted --twopassMode Basic \
+           --outSAMmapqUnique 60 \
+           --quantMode TranscriptomeSAM &> {log}
+
+      """
+
+# Filtering reads not originating from the nuclear genome
+# Based on successive removal of contaminants 
+# in Saini, et al. Elife 2019
+rule remove_contaminants:
+   input:
+      mate1="trimgalore/{sample}_val_1.fq.gz",
+      mate2="trimgalore/{sample}_val_2.fq.gz"
+   params:
+      environment=config["bbtools"]["environment"],
+      contaminant_fastas=",".join([config["fastas"]["rRNA_5s"],
+         config["fastas"]["rRNA_18s"],
+         config["fastas"]["rRNA_28s"],
+         config["fastas"]["tRNA"],
+         config["fastas"]["repeat_elements"],
+         config["fastas"]["srp"],
+         config["fastas"]["mitochondrial"]]),
+      basename="bbsplit/{sample}",
+      refstats="bbsplit/{sample}.reference_mapping_stats.txt"
+   output:
+      mate1="bbsplit/{sample}.clean_R1.fastq",
+      mate2="bbsplit/{sample}.clean_R2.fastq"
+   log:
+      "logs/{sample}_remove_contaminants.log"
+   resources:
+      cores=12,
+      memory_mb=3000,
+      time_min=40
+   shell:
+      """
+      mkdir -p {params.basename}
+      bbsplit.sh in={input.mate1} in2={input.mate2} \
+                 ref={params.contaminant_fastas} \
+                 path={params.basename} \
+                 basename={params.basename}.out_%.fastq \
+                 outu1={output.mate1} outu2={output.mate2} \
+                 refstats={params.refstats} \
+                 &> {log}
+
+      """
+
+
+# Trim Adapters and low quality sequencing reads
+# see https://github.com/FelixKrueger/TrimGalore/blob/master/Docs/Trim_Galore_User_Guide.md 
+rule trimgalore:
+   input:
+      mate1="fastq/{sample}_R1.fastq.gz", #lambda wildcards: glob.glob("fastq/{sample}_*_*_R1_001.fastq.gz".format(sample=wildcards.sample)),
+      mate2="fastq/{sample}_R2.fastq.gz" #lambda wildcards: glob.glob("fastq/{sample}_*_*_R2_001.fastq.gz".format(sample=wildcards.sample))
+   params:
+      environment=config["trimgalore"]["environment"],
+      outdir="trimgalore",
+      basename="{sample}"
+   output:
+      mate1="trimgalore/{sample}_val_1.fq.gz",
+      mate2="trimgalore/{sample}_val_2.fq.gz"
+   log:
+    "logs/{sample}_trimgalore.log"
+   resources:
+      cores=4,
+      threads_per_core=1,
+      memory_mb=5000,
+      time_min=150
+   shell:
+      """
+      trim_galore --cores 4 --gzip --fastqc --paired --output_dir {params.outdir} --basename {params.basename} {input.mate1} {input.mate2} &> {log}
+      """
+
+
+
+
+
+
