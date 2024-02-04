@@ -1,0 +1,57 @@
+RNA-Seq QC report
+-----------------------------------
+
+>>>>>>> Input
+
+    bam file = /n/holyscratch01/macklis_lab/priyav/lab_notebook/cpn_cth_paper_final/qualimap_downsample/CTh_Soma4_downsample.Aligned.sorted.bam
+    gff file = /n/macklis_lab/users/priyav/reference/gtfs/Mus_musculus.GRCm38.101.pPV25.dollar_51.gtf
+    counting algorithm = uniquely-mapped-reads
+    protocol = non-strand-specific
+    5'-3' bias region size = 100
+    5'-3' bias number of top transcripts = 1000
+
+
+>>>>>>> Reads alignment
+
+    reads aligned (left/right) = 4,508,625 / 4,508,940
+    read pairs aligned  = 4,508,507
+    total alignments = 11,328,202
+    secondary alignments = 2,310,637
+    non-unique alignments = 3,472,799
+    aligned to genes  = 6,601,891
+    ambiguous alignments = 195,507
+    no feature assigned = 1,051,487
+    not aligned = 0
+    SSP estimation (fwd/rev) = 0.5 / 0.5
+
+
+>>>>>>> Reads genomic origin
+
+    exonic =  6,601,891 (86.26%)
+    intronic = 691,319 (9.03%)
+    intergenic = 360,168 (4.71%)
+    overlapping exon = 177,158 (2.31%)
+
+
+>>>>>>> Transcript coverage profile
+
+    5' bias = 0.81
+    3' bias = 0.77
+    5'-3' bias = 1.11
+
+
+>>>>>>> Junction analysis
+
+    reads at junctions = 1,980,967
+
+    ACCT : 4.74%
+    AGGT : 4.69%
+    TCCT : 4.13%
+    AGGA : 3.81%
+    ATCT : 2.99%
+    AGCT : 2.88%
+    CCCT : 2.49%
+    GCCT : 2.48%
+    AGAT : 2.36%
+    AGGC : 2.34%
+    AGGG : 2.27%
